@@ -1,0 +1,8 @@
+diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
+--- a/Telegram/SourceFiles/main/main_domain.h
++++ b/Telegram/SourceFiles/main/main_domain.h
+@@ -32,2 +32,2 @@
+-	static constexpr auto kMaxAccounts = 3;
+-	static constexpr auto kPremiumMaxAccounts = 6;
++	static constexpr auto kMaxAccounts = 255;
++	static constexpr auto kPremiumMaxAccounts = 255;

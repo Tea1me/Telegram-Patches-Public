@@ -988,6 +988,21 @@ jobs:
             Remove-Item $log -Force
           }
 
+          # Older compacted Libraries caches kept the Rust stage keys but
+          # pruned this generated C++ binding. Force its source stages to
+          # rebuild when that output is missing, then preserve it below.
+          $walletBinding = Join-Path $env:LibrariesPath "tdesktop_rust\out\src\wallet_engine\wallet_engine.cpp"
+          if (!(Test-Path -LiteralPath $walletBinding)) {
+            $keyDir = Join-Path $env:LibrariesPath "cache_keys"
+            foreach ($stage in @("tlottie", "wallet-engine", "tdesktop_rust")) {
+              $key = Join-Path $keyDir $stage
+              if (Test-Path -LiteralPath $key) {
+                Remove-Item -LiteralPath $key -Force
+              }
+            }
+            Write-Host "Invalidated stale Rust source-stage cache markers."
+          }
+
           if ($env:BUILD_TYPE -ieq "Debug") {
             & $prepareBat skip-release silent qt6 2>&1 |
               Tee-Object -FilePath $log
@@ -1061,6 +1076,7 @@ jobs:
                 -o -path '*/objects-*' \
                 -o -path '*/cache_keys/*' \
                 -o -path '*/patches/*' \
+                -o -path '*/tdesktop_rust/out/src/wallet_engine/wallet_engine.cpp' \
                 -o -path '*/nv-codec-headers/*' \
               ')' \
               -type f \

@@ -1,0 +1,211 @@
+diff --git a/Telegram/SourceFiles/data/data_story.cpp b/Telegram/SourceFiles/data/data_story.cpp
+index deb5afa27aba87c6bcc67795dade48a3b3add81b..f2c5f2ada735d10062262eac3d627c8b1f6b877d 100644
+--- a/Telegram/SourceFiles/data/data_story.cpp
++++ b/Telegram/SourceFiles/data/data_story.cpp
+@@ -420,12 +420,11 @@ bool Story::out() const {
+ }
+ 
+ bool Story::canDownloadIfPremium() const {
+-	return !forbidsForward() || _peer->isSelf();
++	return true;
+ }
+ 
+ bool Story::canDownloadChecked() const {
+-	return _peer->isSelf()
+-		|| (canDownloadIfPremium() && _peer->session().premium());
++	return true;
+ }
+ 
+ bool Story::canShare() const {
+diff --git a/Telegram/SourceFiles/history/history_inner_widget.cpp b/Telegram/SourceFiles/history/history_inner_widget.cpp
+index 391e1d3a01b5eecea099950601227402fad467b7..db3ce013bf5add13d80f5964cf6f783eb92a46a4 100644
+--- a/Telegram/SourceFiles/history/history_inner_widget.cpp
++++ b/Telegram/SourceFiles/history/history_inner_widget.cpp
+@@ -815,18 +815,7 @@ void HistoryInner::setupSwipeReplyAndBack() {
+ }
+ 
+ bool HistoryInner::hasSelectRestriction() const {
+-	if (_chooseForReportReason.has_value()) {
+-		return false;
+-	} else if (session().frozen()) {
+-		return true;
+-	} else if (!_sharingDisallowed.current()) {
+-		return false;
+-	} else if (const auto chat = _peer->asChat()) {
+-		return !chat->canDeleteMessages();
+-	} else if (const auto channel = _peer->asChannel()) {
+-		return !channel->canDeleteMessages();
+-	}
+-	return true;
++	return !_chooseForReportReason.has_value() && bool(session().frozen());
+ }
+ 
+ void HistoryInner::messagesReceived(
+@@ -3911,12 +3900,12 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
+ }
+ 
+ bool HistoryInner::hasCopyRestriction(HistoryItem *item) const {
+-	return !_peer->allowsForwarding() || (item && item->forbidsForward());
++	return false;
+ }
+ 
+ bool HistoryInner::hasCopyMediaRestriction(
+ 		not_null<HistoryItem*> item) const {
+-	return hasCopyRestriction(item) || item->forbidsSaving();
++	return item->forbidsSaving();
+ }
+ 
+ bool HistoryInner::showCopyRestriction(HistoryItem *item) {
+@@ -3944,17 +3933,7 @@ bool HistoryInner::showCopyMediaRestriction(not_null<HistoryItem*> item) {
+ }
+ 
+ bool HistoryInner::hasCopyRestrictionForSelected() const {
+-	if (hasCopyRestriction()) {
+-		return true;
+-	}
+-	for (const auto &item : _selected) {
+-		if (item && item->forbidsForward()) {
+-			return true;
+-		}
+-	}
+-	return hasSelectedText()
+-		&& _selectedTextItem
+-		&& _selectedTextItem->forbidsForward();
++	return false;
+ }
+ 
+ bool HistoryInner::showCopyRestrictionForSelected() {
+diff --git a/Telegram/SourceFiles/history/history_item.cpp b/Telegram/SourceFiles/history/history_item.cpp
+index ae73cb53183601f7f93d6afc83bdf3175a7df922..625c578b7323e6a63cf0d778d78923273aa1dd82 100644
+--- a/Telegram/SourceFiles/history/history_item.cpp
++++ b/Telegram/SourceFiles/history/history_item.cpp
+@@ -3447,9 +3447,7 @@ bool HistoryItem::forbidsForward() const {
+ }
+ 
+ bool HistoryItem::forbidsSaving() const {
+-	if (forbidsForward()) {
+-		return true;
+-	} else if (_media && _media->ttlSeconds()) {
++	if (_media && _media->ttlSeconds()) {
+ 		return true;
+ 	} else if (const auto invoice = _media ? _media->invoice() : nullptr) {
+ 		return HasExtendedMedia(*invoice);
+@@ -3459,7 +3457,6 @@ bool HistoryItem::forbidsSaving() const {
+ 
+ bool HistoryItem::allowsMediaDownloadControls() const {
+ 	return !forbidsSaving()
+-		&& _history->peer->allowsForwarding()
+ 		&& (!_media || _media->allowsForward());
+ }
+ 
+diff --git a/Telegram/SourceFiles/history/view/history_view_list_widget.cpp b/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+index fdbce141359dbeffe05220a137e3f0e88c419cc3..1819f750c9cb68ac47d6bc92a312ac6d5da046c4 100644
+--- a/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+@@ -2151,13 +2151,11 @@ bool ListWidget::isEmpty() const {
+ }
+ 
+ bool ListWidget::hasCopyRestriction(HistoryItem *item) const {
+-	return _delegate->listCopyRestrictionType(item)
+-		!= CopyRestrictionType::None;
++	return false;
+ }
+ 
+ bool ListWidget::hasCopyMediaRestriction(not_null<HistoryItem*> item) const {
+-	return _delegate->listCopyMediaRestrictionType(item)
+-		!= CopyRestrictionType::None;
++	return item->forbidsSaving();
+ }
+ 
+ bool ListWidget::showCopyRestriction(HistoryItem *item) {
+@@ -2187,21 +2185,6 @@ bool ListWidget::showCopyMediaRestriction(not_null<HistoryItem*> item) {
+ }
+ 
+ bool ListWidget::hasCopyRestrictionForSelected() const {
+-	if (hasCopyRestriction()) {
+-		return true;
+-	}
+-	if (_selected.empty()) {
+-		if (_selectedTextItem && _selectedTextItem->forbidsForward()) {
+-			return true;
+-		}
+-	}
+-	for (const auto &[itemId, selection] : _selected) {
+-		if (const auto item = session().data().message(itemId)) {
+-			if (item->forbidsForward()) {
+-				return true;
+-			}
+-		}
+-	}
+ 	return false;
+ }
+ 
+@@ -2220,9 +2203,7 @@ bool ListWidget::showCopyRestrictionForSelected() {
+ }
+ 
+ bool ListWidget::hasSelectRestriction() const {
+-	return session().frozen()
+-		|| (_delegate->listSelectRestrictionType()
+-			!= CopyRestrictionType::None);
++	return bool(session().frozen());
+ }
+ 
+ Element *ListWidget::lookupItemByY(int y) const {
+diff --git a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
+index ecccfe37bcee338a85e477ed350e0599029a4e1f..fe0a6372d3666142a70aa48b6f1bbd65c8ee4be7 100644
+--- a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
+@@ -1480,15 +1480,14 @@ void TopBarWidget::updateMembersShowArea() {
+ }
+ 
+ bool TopBarWidget::showSelectedState() const {
+-	return (_selectedCount > 0)
+-		&& (_canDelete || _canForward || _canSendNow);
++	return _selectedCount > 0;
+ }
+ 
+ void TopBarWidget::showSelected(SelectedState state) {
+ 	auto canDelete = (state.count > 0 && state.count == state.canDeleteCount);
+ 	auto canForward = (state.count > 0 && state.count == state.canForwardCount);
+ 	auto canSendNow = (state.count > 0 && state.count == state.canSendNowCount);
+-	auto count = (!canDelete && !canForward && !canSendNow) ? 0 : state.count;
++	auto count = state.count;
+ 	if (_selectedCount == count
+ 		&& _canDelete == canDelete
+ 		&& _canForward == canForward
+diff --git a/Telegram/SourceFiles/info/media/info_media_provider.cpp b/Telegram/SourceFiles/info/media/info_media_provider.cpp
+index 3d8acd456b951c78201cd059b45cd6988202cbca..762254263fa31ef3c5335bc12ad8fcb80f8cbe74 100644
+--- a/Telegram/SourceFiles/info/media/info_media_provider.cpp
++++ b/Telegram/SourceFiles/info/media/info_media_provider.cpp
+@@ -79,16 +79,7 @@ Type Provider::type() {
+ }
+ 
+ bool Provider::hasSelectRestriction() {
+-	if (_peer->session().frozen()) {
+-		return true;
+-	} else if (_peer->allowsForwarding()) {
+-		return false;
+-	} else if (const auto chat = _peer->asChat()) {
+-		return !chat->canDeleteMessages();
+-	} else if (const auto channel = _peer->asChannel()) {
+-		return !channel->canDeleteMessages();
+-	}
+-	return true;
++	return bool(_peer->session().frozen());
+ }
+ 
+ rpl::producer<bool> Provider::hasSelectRestrictionChanges() {
+diff --git a/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp b/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
+index 2acbe80457cfc7d760ece77229ad2513b3fb2e41..3d6a1af9515e00b839959ee1988f382a302f5633 100644
+--- a/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
++++ b/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
+@@ -1454,8 +1454,7 @@ bool OverlayWidget::hasCopyMediaRestriction(bool skipPremiumCheck) const {
+ 			? !story->canDownloadIfPremium()
+ 			: !story->canDownloadChecked();
+ 	}
+-	return (_history && !_history->peer->allowsForwarding())
+-		|| (_message && _message->forbidsSaving());
++	return (_message && _message->forbidsSaving());
+ }
+ 
+ bool OverlayWidget::showCopyMediaRestriction(bool skipPRemiumCheck) {

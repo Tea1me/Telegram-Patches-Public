@@ -1,0 +1,61 @@
+diff --git a/Telegram/SourceFiles/data/data_stories.cpp b/Telegram/SourceFiles/data/data_stories.cpp
+--- a/Telegram/SourceFiles/data/data_stories.cpp
++++ b/Telegram/SourceFiles/data/data_stories.cpp
+@@ -7,2 +7,3 @@
+ #include "data/data_stories.h"
++#include "base/options.h"
+ #include "base/unixtime.h"
+@@ -44,3 +45,11 @@
+ constexpr auto kPollingViewsPerPage = Story::kRecentViewersMax;
+ using UpdateFlag = StoryUpdate::Flag;
++
++base::options::toggle DisableStories({
++	.id = kOptionDisableStories,
++	.name = "Disable stories",
++	.description = "Hide stories and stop loading story lists.",
++	.defaultValue = false,
++});
++
+ [[nodiscard]] std::optional<StoryMedia> ParseMedia(
+@@ -136,2 +145,5 @@
+ } // namespace
++
++const char kOptionDisableStories[] = "disable-stories";
++
+ std::vector<StoryId> RespectingPinned(const StoriesIds &ids) {
+@@ -408,4 +420,7 @@
+ void Stories::parseAndApply(
+ 		const MTPPeerStories &stories,
+ 		ParseSource source) {
++	if (DisableStories.value()) {
++		return;
++	}
+ 	const auto &data = stories.data();
+@@ -686,2 +701,5 @@
+ void Stories::loadMore(StorySourcesList list) {
++	if (DisableStories.value()) {
++		return;
++	}
+ 	const auto index = static_cast<int>(list);
+diff --git a/Telegram/SourceFiles/data/data_stories.h b/Telegram/SourceFiles/data/data_stories.h
+--- a/Telegram/SourceFiles/data/data_stories.h
++++ b/Telegram/SourceFiles/data/data_stories.h
+@@ -35,4 +35,6 @@
+ struct StoryAlbum;
+ class StoryPreload;
+ 
++extern const char kOptionDisableStories[];
++
+ struct StoriesIds {
+diff --git a/Telegram/SourceFiles/settings/settings_experimental.cpp b/Telegram/SourceFiles/settings/settings_experimental.cpp
+--- a/Telegram/SourceFiles/settings/settings_experimental.cpp
++++ b/Telegram/SourceFiles/settings/settings_experimental.cpp
+@@ -33,2 +33,3 @@
+ #include "chat_helpers/tabbed_panel.h"
++#include "data/data_stories.h"
+ #include "dialogs/dialogs_entry.h"
+@@ -368,3 +369,4 @@
+ 				Dialogs::kOptionDialogsUnreadOnTop,
+ 				Dialogs::Ui::kOptionDialogsMuteIcon,
++				Data::kOptionDisableStories,
+ 				kOptionUseNewChatView,

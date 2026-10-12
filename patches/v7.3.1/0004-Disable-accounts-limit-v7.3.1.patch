@@ -1,0 +1,15 @@
+diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
+index 7f85abc8fdcc141064a2a2e818f1b81a90dcec6a..74eaa40f79b0adfb94f33997ea52f3e816083d4f 100644
+--- a/Telegram/SourceFiles/main/main_domain.h
++++ b/Telegram/SourceFiles/main/main_domain.h
+@@ -36,8 +36,8 @@ public:
+ 		std::unique_ptr<Account> account;
+ 	};
+ 
+-	static constexpr auto kMaxAccounts = 3;
+-	static constexpr auto kPremiumMaxAccounts = 6;
++	static constexpr auto kMaxAccounts = 255;
++	static constexpr auto kPremiumMaxAccounts = 255;
+ 
+ 	explicit Domain(const QString &dataName);
+ 	~Domain();

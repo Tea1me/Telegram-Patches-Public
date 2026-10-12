@@ -1,0 +1,1562 @@
+name: Build Telegram Desktop Patched Portable
+
+run-name: "Telegram Desktop v7.3.1 / ${{ inputs.build_type || 'Release' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build type. Release is for daily use; Debug is lighter and closer to upstream CI."
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-v7.3.1-${{ github.ref }}-${{ inputs.build_type || 'Release' }}
+  cancel-in-progress: false
+
+env:
+  TDESKTOP_REF: "v7.3.1"
+  TDESKTOP_EXPECTED_SHA: "6fed91ffab9861771a75f29df65031b3c80b6941"
+  TDESKTOP_REPO: "https://github.com/telegramdesktop/tdesktop.git"
+
+  PATCH_DIR: "${{ github.workspace }}\\controller\\patches\\v7.3.1"
+  PREPARE_PATH: "Telegram/build/prepare/prepare.py"
+  BUILD_TYPE: "${{ inputs.build_type || 'Release' }}"
+
+jobs:
+  build:
+    name: Windows x64 / Qt6 / ${{ inputs.build_type || 'Release' }}
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 360
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CCACHE_DISABLE: "1"
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      # ------------------------------------------------------------
+      # Your repository contains only this workflow + audited patches.
+      # ------------------------------------------------------------
+      - name: Checkout patch repository
+        uses: actions/checkout@v7
+        with:
+          path: controller
+          persist-credentials: false
+
+      - name: Validate Telegram API secrets
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_ID)) {
+            throw "Missing Actions secret: TDESKTOP_API_ID"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_HASH)) {
+            throw "Missing Actions secret: TDESKTOP_API_HASH"
+          }
+
+      - name: Normalize local patch files to LF
+        shell: pwsh
+        run: |
+          $patchDir = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "controller\patches\v7.3.1"
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+          Get-ChildItem "$patchDir\*.patch" |
+            Sort-Object Name |
+            ForEach-Object {
+              $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+              $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+
+              $beforeCr = ($text.ToCharArray() |
+                Where-Object { [int]$_ -eq 13 }).Count
+
+              $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+
+              [System.IO.File]::WriteAllText(
+                $_.FullName,
+                $text,
+                $utf8NoBom
+              )
+
+              $after = [System.IO.File]::ReadAllBytes($_.FullName)
+
+              if ($after -contains 13) {
+                throw "CR byte remains in patch: $($_.Name)"
+              }
+
+              Write-Host "$($_.Name): removed $beforeCr CR byte(s)"
+            }
+
+      - name: Verify local patch line endings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          patch_dir="$GITHUB_WORKSPACE/controller/patches/v7.3.1"
+
+          mapfile -t patches < <(
+            find "$patch_dir" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | sort
+          )
+
+          if [ "${#patches[@]}" -ne 5 ]; then
+            echo "Expected 5 patch files, found ${#patches[@]}."
+            exit 1
+          fi
+
+          for patch in "${patches[@]}"; do
+            if grep -q $'\r' "$patch"; then
+              echo "CRLF/CR detected in: $patch"
+              exit 1
+            fi
+
+            echo "LF OK: $(basename "$patch")"
+          done
+
+      - name: Reclaim unused preinstalled SDKs before dependency restore
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, Root, @{n="FreeGiB";e={[math]::Round($_.Free / 1GB, 2)}}
+          # The C++ build does not use Android or .NET targeting packs.
+          # Keep Windows SDK binaries, Visual Studio, Python, Git and runner files.
+          foreach ($unused in @(
+            "C:\Android",
+            "C:\Program Files\Android",
+            "C:\Program Files\dotnet\packs"
+          )) {
+            if (Test-Path $unused) {
+              Remove-Item $unused -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Prepare build directories on the drive with most free space
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidateNames = @(
+            [System.IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE).Substring(0, 1),
+            [System.IO.Path]::GetPathRoot($env:USERPROFILE).Substring(0, 1)
+          ) | Sort-Object -Unique
+          $drive = $candidateNames |
+            ForEach-Object { Get-PSDrive -Name $_ -PSProvider FileSystem } |
+            Sort-Object Free -Descending |
+            Select-Object -First 1
+          if (!$drive -or $drive.Free -lt 40GB) {
+            throw "Less than 40 GiB free before checkout/cache restore. Use a Windows runner with more disk space."
+          }
+          # A real, short path. Do not redirect it to USERPROFILE through a symlink.
+          $buildRoot = Join-Path $drive.Root "TBuild"
+          if (Test-Path $buildRoot) {
+            throw "Expected an empty hosted runner; build root already exists: $buildRoot"
+          }
+          New-Item -ItemType Directory -Path (Join-Path $buildRoot "Libraries\win64") -Force | Out-Null
+          $buildTemp = Join-Path $buildRoot "Temp"
+          New-Item -ItemType Directory -Path $buildTemp -Force | Out-Null
+          @(
+            "TBUILD=$buildRoot",
+            "LibrariesPath=$(Join-Path $buildRoot 'Libraries\win64')",
+            "TEMP=$buildTemp",
+            "TMP=$buildTemp"
+          ) | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Actual build root: $buildRoot"
+          Write-Host "Build-drive free space before restore: $([math]::Round($drive.Free / 1GB, 2)) GiB"
+
+      # ------------------------------------------------------------
+      # Clone the exact upstream revision these patches target.
+      # Do not silently move this to "latest": update patches first.
+      # ------------------------------------------------------------
+      - name: Configure Git for LF checkouts
+        shell: pwsh
+        run: |
+          # Git for Windows often defaults to core.autocrlf=true.
+          # The patches in this repository use LF, so configure this
+          # BEFORE cloning Telegram Desktop and its submodules.
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          git config --global core.safecrlf false
+
+          Write-Host "core.autocrlf = $(git config --global --get core.autocrlf)"
+          Write-Host "core.eol      = $(git config --global --get core.eol)"
+
+      - name: Clone Telegram Desktop v7.3.1
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:TBUILD "tdesktop"
+          git -c core.autocrlf=false -c core.eol=lf clone `
+            --recursive `
+            --shallow-submodules `
+            --depth 1 `
+            --branch "$env:TDESKTOP_REF" `
+            "$env:TDESKTOP_REPO" `
+            "$repo"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to clone Telegram Desktop $env:TDESKTOP_REF"
+          }
+          if (!(Test-Path -LiteralPath (Join-Path $repo ".git"))) {
+            throw "Telegram Desktop clone missing from configured TBUILD root: $repo"
+          }
+
+          Write-Host "Telegram source directory: $repo"
+
+
+          git -C $repo config core.autocrlf false
+          git -C $repo config core.eol lf
+          git -C $repo config core.safecrlf false
+
+          $sha = (
+            git -C $repo rev-parse HEAD
+          ).Trim()
+
+          Write-Host "Telegram Desktop commit: $sha"
+          Write-Host "Expected commit        : $env:TDESKTOP_EXPECTED_SHA"
+
+          if ($sha -ne $env:TDESKTOP_EXPECTED_SHA) {
+            throw "Unexpected v7.3.1 commit. Refusing to apply patches."
+          }
+
+          "TDESKTOP_SHA=$sha" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ------------------------------------------------------------
+      # Strict patch gate:
+      #
+      # - exactly five patches must exist
+      # - every patch must pass git apply --check
+      # - apply in numeric filename order
+      # - if any one fails, compilation never starts
+      # ------------------------------------------------------------
+      - name: Normalize patch target files to LF
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:TBUILD "tdesktop"
+          if (!(Test-Path -LiteralPath (Join-Path $repo ".git"))) {
+            throw "Telegram Desktop clone missing from configured TBUILD root: $repo"
+          }
+          $patchDir = Join-Path $env:GITHUB_WORKSPACE "controller\patches\v7.3.1"
+
+          $targets = New-Object System.Collections.Generic.HashSet[string]
+
+          Get-ChildItem "$patchDir\*.patch" |
+            Sort-Object Name |
+            ForEach-Object {
+              foreach ($line in Get-Content $_.FullName) {
+                if ($line -match '^\+\+\+ b/(.+)$') {
+                  [void]$targets.Add($Matches[1])
+                }
+              }
+            }
+
+          if ($targets.Count -eq 0) {
+            throw "No patch target files were discovered."
+          }
+
+          foreach ($relative in $targets) {
+            $path = Join-Path $repo ($relative -replace '/', '\')
+
+            if (!(Test-Path $path)) {
+              throw "Patch target does not exist: $relative"
+            }
+
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+
+            $hadCrLf = $text.Contains("`r`n")
+            $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+
+            # UTF-8 without BOM, LF only.
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($path, $text, $utf8NoBom)
+
+            $after = [System.IO.File]::ReadAllBytes($path)
+            $afterText = [System.Text.Encoding]::UTF8.GetString($after)
+
+            if ($afterText.Contains("`r")) {
+              throw "CR character remains after normalization: $relative"
+            }
+
+            if ($hadCrLf) {
+              Write-Host "Normalized CRLF -> LF: $relative"
+            } else {
+              Write-Host "Already LF: $relative"
+            }
+          }
+
+          # With core.autocrlf=false, LF-normalized upstream files should
+          # still be identical to HEAD before any patch is applied.
+          $dirty = git -C $repo status --porcelain
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "git status failed."
+          }
+
+          if ($dirty) {
+            Write-Host $dirty
+            throw "LF normalization changed upstream content unexpectedly."
+          }
+
+      - name: Apply strict source transformations
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:TBUILD "tdesktop"
+          $patchDir = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "controller\patches\v7.3.1"
+
+          $manifest = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "PATCHES-APPLIED.txt"
+
+          python `
+            "$env:GITHUB_WORKSPACE\controller\tools\apply_semantic_patches.py" `
+            --repo "$repo" `
+            --patch-dir "$patchDir" `
+            --manifest "$manifest"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Strict source transformation failed."
+          }
+
+          $tree = (
+            git -C $repo rev-parse "HEAD^{tree}"
+          ).Trim()
+
+          "PATCHED_TREE=$tree" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "Patched tree: $tree"
+
+      - name: Generate canonical Git patches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          rm -rf "$GITHUB_WORKSPACE/generated-patches"
+          mkdir -p "$GITHUB_WORKSPACE/generated-patches"
+
+          git format-patch \
+            --no-signature \
+            --output-directory "$GITHUB_WORKSPACE/generated-patches" \
+            "$TDESKTOP_SHA..HEAD"
+
+          count="$(
+            find "$GITHUB_WORKSPACE/generated-patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | wc -l
+          )"
+
+          if [ "$count" -ne 5 ]; then
+            echo "Expected 5 generated patches, got $count."
+            exit 1
+          fi
+
+          {
+            echo
+            echo "Canonical generated patches:"
+            for patch in "$GITHUB_WORKSPACE"/generated-patches/*.patch; do
+              echo
+              echo "$(basename "$patch")"
+              echo "SHA256: $(sha256sum "$patch" | awk '{print $1}')"
+            done
+          } >> "$GITHUB_WORKSPACE/PATCHES-APPLIED.txt"
+
+          ls -1 "$GITHUB_WORKSPACE/generated-patches"
+
+      - name: Verify generated patches from clean upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          expected_tree="$PATCHED_TREE"
+
+          git reset --hard "$TDESKTOP_SHA"
+          git clean -fd
+
+          mapfile -t generated < <(
+            find "$GITHUB_WORKSPACE/generated-patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | sort
+          )
+
+          git am --3way "${generated[@]}"
+
+          git diff "$TDESKTOP_SHA..HEAD" --check
+
+          verified_tree="$(
+            git rev-parse HEAD^{tree}
+          )"
+
+          echo "Expected tree: $expected_tree"
+          echo "Verified tree: $verified_tree"
+
+          if [ "$verified_tree" != "$expected_tree" ]; then
+            echo "Generated patches recreated a different tree."
+            exit 1
+          fi
+
+          git diff "$TDESKTOP_SHA..HEAD" --binary \
+            > "$GITHUB_WORKSPACE/TDESKTOP-PATCHED-DIFF.patch"
+
+      - name: Upload generated patches
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-v7.3.1-Generated-Patches
+          path: |
+            generated-patches/**
+            PATCHES-APPLIED.txt
+            TDESKTOP-PATCHED-DIFF.patch
+          if-no-files-found: error
+          retention-days: 30
+
+      # ------------------------------------------------------------
+      # v7.3.1 build-tooling hotfix.
+      #
+      # The pinned upstream prepare.py still bootstraps MSYS2 from
+      # 2025-08-30 and currently fails on GitHub-hosted Windows with:
+      #
+      #   error: target not found: mingw-w64-x86_64-diffutils
+      #
+      # Use the current MSYS2 bootstrap and the MSYS-native diffutils
+      # package. This changes only dependency preparation, not Telegram
+      # product source.
+      # ------------------------------------------------------------
+      - name: Sanity-check patched source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          # Main::FreezeInfo has an explicit operator bool(). A direct
+          # `return session().frozen();` from a bool function is invalid C++,
+          # while bool(...) / if(...) / logical operators are valid.
+          bad="$(
+            git grep -n -E \
+              'return[[:space:]]+(_peer->)?session\(\)\.frozen\(\);' \
+              -- \
+              Telegram/SourceFiles/history/view/history_view_list_widget.cpp \
+              Telegram/SourceFiles/info/media/info_media_provider.cpp \
+              || true
+          )"
+
+          if [ -n "$bad" ]; then
+            echo "Invalid direct FreezeInfo return found:"
+            echo "$bad"
+            exit 1
+          fi
+
+          git grep -n -F \
+            'return bool(session().frozen());' \
+            -- Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+
+          git grep -n -F \
+            'return bool(_peer->session().frozen());' \
+            -- Telegram/SourceFiles/info/media/info_media_provider.cpp
+
+          echo "FreezeInfo return checks passed."
+
+      - name: Adapt pinned v7.3.1 build tooling
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $prepare = Join-Path `
+            $env:TBUILD `
+            "tdesktop\Telegram\build\prepare\prepare.py"
+
+          if (!(Test-Path $prepare)) {
+            throw "prepare.py not found: $prepare"
+          }
+
+          $content = [System.IO.File]::ReadAllText($prepare)
+
+          function Assert-ExactlyOne {
+            param(
+              [string]$Haystack,
+              [string]$Needle,
+              [string]$Label
+            )
+
+            $count = (
+              [regex]::Matches(
+                $Haystack,
+                [regex]::Escape($Needle)
+              )
+            ).Count
+
+            if ($count -ne 1) {
+              throw "Expected exactly one $Label; found $count."
+            }
+          }
+
+          # v7.3.1 already uses the current MSYS2 UCRT64 package names.
+          # The v7.2.10 diffutils rename and mingw64 NASM downgrade do not
+          # match this pinned prepare.py and are intentionally not injected.
+          $currentDiffutils = "mingw-w64-ucrt-x86_64-diffutils"
+          Assert-ExactlyOne `
+            $content `
+            $currentDiffutils `
+            "UCRT64 diffutils package"
+
+          if ($content.Contains("mingw-w64-x86_64-diffutils")) {
+            throw "Unexpected stale v7.2.10 diffutils package name."
+          }
+
+          Assert-ExactlyOne `
+            $content `
+            "2026-09-27/msys2-base-x86_64-20260927.sfx.exe" `
+            "pinned MSYS2 bootstrap"
+
+          # Qt 6.11.2 can auto-enable Windows SDK ICU independently from
+          # ordinary ICU. Disable both to keep the packaged executable's
+          # static loader dependencies consistent with the audit below.
+          $qtNeedle = "        -static-runtime ^`n        -feature-c++20 ^"
+          $qtReplacement = (
+            "        -static-runtime ^`n" +
+            "        -no-icu ^`n" +
+            "        -no-feature-winsdkicu ^`n" +
+            "        -feature-c++20 ^"
+          )
+
+          Assert-ExactlyOne `
+            $content `
+            $qtNeedle `
+            "Qt6 static-runtime configure block"
+
+          $content = $content.Replace(
+            $qtNeedle,
+            $qtReplacement
+          )
+
+          # VS2026 exposes the v145 toolset; pass it explicitly to the
+          # x64 Breakpad build in the pinned dependency script.
+          $breakpadX64Needle = (
+            "win64:`n" +
+            "    SET `"FolderPostfix=_x64`"`n" +
+            "winarm:"
+          )
+
+          $breakpadX64Replacement = (
+            "win64:`n" +
+            "    SET `"FolderPostfix=_x64`"`n" +
+            "    SET `"ToolsetProp=/property:PlatformToolset=v145`"`n" +
+            "winarm:"
+          )
+
+          $breakpadX64Count = (
+            [regex]::Matches(
+              $content,
+              [regex]::Escape($breakpadX64Needle)
+            )
+          ).Count
+
+          if ($breakpadX64Count -ne 1) {
+            throw "Expected exactly one Breakpad win64 toolset block; found $breakpadX64Count."
+          }
+
+          $content = $content.Replace(
+            $breakpadX64Needle,
+            $breakpadX64Replacement
+          )
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+          [System.IO.File]::WriteAllText(
+            $prepare,
+            $content,
+            $utf8NoBom
+          )
+
+          $qtConfigFix = @'
+          import ast
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          build_type = sys.argv[2]
+          if build_type not in ('Release', 'Debug'):
+              raise RuntimeError(f'Unsupported build type: {build_type}')
+          source = path.read_text(encoding='utf-8')
+          start_marker = "else: # qt > '6'"
+          end_marker = "stage('tg_owt',"
+          if source.count(start_marker) != 1 or source.count(end_marker) != 1:
+              raise RuntimeError('Pinned Qt 6 stage boundaries changed')
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+          qt6 = source[start:end]
+
+          def replace_once(old, new):
+              global qt6
+              if qt6.count(old) != 1:
+                  raise RuntimeError(f'Qt 6 Windows anchor changed: {old!r}')
+              qt6 = qt6.replace(old, new, 1)
+
+          replace_once('    SET CONFIGURATIONS=-debug-and-release\n',
+                       '    SET CONFIGURATIONS=-release\n')
+          replace_once('        -force-debug-info ^\n', '')
+          old = ('    cmake --build . --config Debug\n'
+                 '    cmake --install . --config Debug\n'
+                 '    cmake --build .\n'
+                 '    cmake --install .\n')
+          new = (f'    cmake --build . --config {build_type} --parallel 2\n'
+                 f'    cmake --install . --config {build_type}\n'
+                 # Only Qt is cleaned here: later stages use the installed prefix.
+                 # Other dependency stages consume their own build-tree libraries.
+                 f'    cmake --build . --config {build_type} --target clean\n')
+          replace_once(old, new)
+          source = source[:start] + qt6 + source[end:]
+          ast.parse(source, filename=str(path))
+          path.write_text(source, encoding='utf-8', newline='\n')
+          print(f'Qt 6 Windows: only {build_type}; no forced Release debug symbols; clean after install')
+          '@
+          $qtConfigFix | python - $prepare $env:BUILD_TYPE
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to restrict the Qt6 Windows build configuration."
+          }
+
+          # Validate the exact v7.3.1 dependency script before a long build.
+          python -m py_compile $prepare
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "prepare.py is invalid after adaptation."
+          }
+
+          $after = [System.IO.File]::ReadAllText($prepare)
+
+          foreach ($required in @(
+            $currentDiffutils,
+            "2026-09-27/msys2-base-x86_64-20260927.sfx.exe",
+            "-no-icu ^",
+            "-no-feature-winsdkicu ^",
+            'SET "ToolsetProp=/property:PlatformToolset=v145"'
+          )) {
+            if (!$after.Contains($required)) {
+              throw "Required build-tooling setting missing: $required"
+            }
+          }
+
+          if ($after.Contains("mingw-w64-x86_64-diffutils")) {
+            throw "Stale mingw64 diffutils package name remains."
+          }
+
+          foreach ($requiredOnce in @(
+            "-no-icu ^",
+            "-no-feature-winsdkicu ^"
+          )) {
+            $count = (
+              [regex]::Matches(
+                $after,
+                [regex]::Escape($requiredOnce)
+              )
+            ).Count
+
+            if ($count -ne 1) {
+              throw "Expected exactly one setting '$requiredOnce'; found $count."
+            }
+          }
+
+          $breakpadX64Expected = (
+            "win64:`n" +
+            "    SET `"FolderPostfix=_x64`"`n" +
+            "    SET `"ToolsetProp=/property:PlatformToolset=v145`"`n" +
+            "winarm:"
+          )
+          Assert-ExactlyOne `
+            $after `
+            $breakpadX64Expected `
+            "Breakpad x64 toolset block"
+
+          Write-Host ""
+          Write-Host "========== v7.3.1 build-tooling adjustments =========="
+          Write-Host "MSYS2        : pinned upstream UCRT64 package set"
+          Write-Host "Qt ICU       : -no-icu"
+          Write-Host "Qt WinSDK ICU: -no-feature-winsdkicu"
+          Write-Host "Breakpad x64 : VS2026 v145 toolset"
+          Write-Host "Qt build     : only selected configuration"
+          Write-Host "======================================================="
+
+          $lines = Get-Content $prepare
+          $anchors = @(
+            @{
+              Label = "MSYS2 UCRT64 package"
+              Needle = $currentDiffutils
+            },
+            @{
+              Label = "Qt6 ICU flags"
+              Needle = "-no-feature-winsdkicu ^"
+            }
+          )
+
+          foreach ($anchor in $anchors) {
+            $lineNumber = (
+              Select-String `
+                -Path $prepare `
+                -SimpleMatch $anchor.Needle |
+              Select-Object -First 1
+            ).LineNumber
+
+            if (!$lineNumber) {
+              throw "Could not locate validated prepare.py anchor: $($anchor.Label)"
+            }
+
+            $from = [Math]::Max(0, $lineNumber - 10)
+            $to = [Math]::Min($lines.Count - 1, $lineNumber + 18)
+
+            Write-Host ""
+            Write-Host "----- prepare.py: $($anchor.Label) -----"
+
+            for ($i = $from; $i -le $to; $i++) {
+              Write-Host ("{0,5}: {1}" -f ($i + 1), $lines[$i])
+            }
+          }
+
+          @(
+            "Build tooling adjustments:",
+            "- upstream MSYS2 UCRT64 package set verified",
+            "- Qt6 -> -no-icu",
+            "- Qt6 -> -no-feature-winsdkicu",
+            "- Breakpad x64 -> VS2026 v145",
+            "- Qt6 Windows -> only $env:BUILD_TYPE; clean after installation"
+          ) | Set-Content `
+            "$env:GITHUB_WORKSPACE\BUILD-TOOLING-HOTFIXES.txt" `
+            -Encoding utf8
+
+      # ------------------------------------------------------------
+      # Build environment + dependency-cache key.
+      #
+      # This follows Telegram's upstream model: restore caches, ALWAYS
+      # run prepare, and let prepare.py's per-stage cache_keys decide
+      # SKIPPING / CHANGED / BUILDING.
+      # ------------------------------------------------------------
+      - name: Detect build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DOCPATH="$TBUILD/tdesktop/docs/building-win.md"
+
+          SDK="$(
+            grep "SDK version" "$DOCPATH" |
+            sed -n -r 's/.*\*\*([0-9.]+)\*\* SDK version.*/\1/p' |
+            head -n 1
+          )"
+
+          if [ -z "$SDK" ]; then
+            echo "Unable to detect Windows SDK version."
+            exit 1
+          fi
+
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+
+          sed -i \
+            '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' \
+            "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          {
+            sha256sum < "$TBUILD/tdesktop/$PREPARE_PATH"
+            echo "$SDK"
+            echo "$TDESKTOP_REF"
+            echo "$BUILD_TYPE"
+            echo "qt6"
+            echo "$TBUILD"
+            echo "${ImageOS:-windows2025-vs2026}"
+            echo "${ImageVersion:-unknown}"
+            echo "MSVC-14.44"
+            echo "v6"
+          } > "$GITHUB_WORKSPACE/CACHE_KEY.txt"
+
+          CACHE_KEY="$(
+            sha256sum < "$GITHUB_WORKSPACE/CACHE_KEY.txt" |
+            awk '{print $1}'
+          )"
+
+          echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_ENV"
+
+          echo "SDK       : $SDK"
+          echo "Build type: $BUILD_TYPE"
+          echo "Cache key : $CACHE_KEY"
+
+      - name: Native Tools Command Prompt
+        uses: Eden-CI/msvc-dev-cmd@master
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+          toolset: "14.44"
+      - name: Expose VS2026 ATL/MFC to legacy Breakpad
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+      
+          if (!$env:VSINSTALLDIR) {
+            throw "VSINSTALLDIR is not set after msvc-dev-cmd."
+          }
+      
+          $toolsRoot = Join-Path `
+            $env:VSINSTALLDIR `
+            "VC\Tools\MSVC"
+      
+          if (!(Test-Path $toolsRoot)) {
+            throw "MSVC tools root not found: $toolsRoot"
+          }
+      
+          $atlCandidates = @(
+            Get-ChildItem `
+              $toolsRoot `
+              -Directory `
+              -ErrorAction Stop |
+            ForEach-Object {
+              $root = Join-Path $_.FullName "ATLMFC"
+              $atlbase = Join-Path $root "include\atlbase.h"
+              $atlcomcli = Join-Path $root "include\atlcomcli.h"
+      
+              if (
+                (Test-Path $atlbase) -and
+                (Test-Path $atlcomcli)
+              ) {
+                [PSCustomObject]@{
+                  Version = $_.Name
+                  Root = $root
+                }
+              }
+            }
+          )
+      
+          if ($atlCandidates.Count -eq 0) {
+            throw "No installed ATL/MFC headers were found under $toolsRoot."
+          }
+      
+          $selected = (
+            $atlCandidates |
+            Sort-Object {
+              try {
+                [version]$_.Version
+              }
+              catch {
+                [version]"0.0"
+              }
+            } -Descending |
+            Select-Object -First 1
+          )
+      
+          Write-Host "Selected ATL/MFC:"
+          Write-Host "  Version : $($selected.Version)"
+          Write-Host "  Root    : $($selected.Root)"
+      
+          $legacy = Join-Path `
+            $env:VSINSTALLDIR `
+            "VC\atlmfc"
+      
+          if (Test-Path $legacy) {
+            $legacyAtlBase = Join-Path $legacy "include\atlbase.h"
+            $legacyAtlComCli = Join-Path $legacy "include\atlcomcli.h"
+      
+            if (
+              !(Test-Path $legacyAtlBase) -or
+              !(Test-Path $legacyAtlComCli)
+            ) {
+              throw "Legacy ATL/MFC path exists but is incomplete: $legacy"
+            }
+      
+            Write-Host "Legacy ATL/MFC path already works: $legacy"
+          }
+          else {
+            New-Item `
+              -ItemType Junction `
+              -Path $legacy `
+              -Target $selected.Root |
+              Out-Null
+      
+            Write-Host "Created compatibility junction:"
+            Write-Host "  $legacy"
+            Write-Host "    -> $($selected.Root)"
+          }
+      
+          foreach ($header in @(
+            "$legacy\include\atlbase.h",
+            "$legacy\include\atlcomcli.h"
+          )) {
+            if (!(Test-Path $header)) {
+              throw "ATL compatibility check failed: $header"
+            }
+      
+            Write-Host "ATL OK: $header"
+          }
+      - name: Configure NuGet sources
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: Restore ThirdParty cache
+        id: cache-thirdparty
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-${{ runner.arch }}-td-v731-v6-${{ env.BUILD_TYPE }}-third-party-${{ env.CACHE_KEY }}
+
+      - name: Restore Libraries cache
+        id: cache-libraries
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-td-v731-v6-${{ env.BUILD_TYPE }}-libs-${{ env.CACHE_KEY }}
+
+      - name: Restore Qt6 cache
+        id: cache-qt6
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-td-v731-v6-${{ env.BUILD_TYPE }}-qt6-${{ env.CACHE_KEY }}
+
+      - name: Cache restore summary
+        shell: pwsh
+        run: |
+          Write-Host "ThirdParty exact hit : ${{ steps.cache-thirdparty.outputs.cache-hit }}"
+          Write-Host "Libraries exact hit  : ${{ steps.cache-libraries.outputs.cache-hit }}"
+          Write-Host "Qt6 exact hit        : ${{ steps.cache-qt6.outputs.cache-hit }}"
+          Write-Host ""
+          Write-Host "Prepare still runs intentionally."
+          Write-Host "Telegram's internal stage cache_keys decide what is skipped."
+
+      - name: Check actual disk budget after cache restore
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $buildDrive = [System.IO.Path]::GetPathRoot($env:TBUILD).Substring(0, 1)
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, Root, @{n="FreeGiB";e={[math]::Round($_.Free / 1GB, 2)}}
+          if ((Get-PSDrive C).Free -lt 3GB) {
+            throw "System drive has less than 3 GiB free; preserve space for runner diagnostics."
+          }
+          if ((Get-PSDrive $buildDrive).Free -lt 30GB) {
+            throw "Build drive has less than 30 GiB free after restore. Use a larger Windows runner."
+          }
+
+      - name: Prepare Telegram Desktop libraries
+        id: prepare-libraries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $prepareBat = Join-Path `
+            $env:TBUILD `
+            "tdesktop\Telegram\build\prepare\win.bat"
+
+          $log = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "prepare-telegram-libraries.log"
+
+          if (Test-Path $log) {
+            Remove-Item $log -Force
+          }
+
+          if ($env:BUILD_TYPE -ieq "Debug") {
+            & $prepareBat skip-release silent qt6 2>&1 |
+              Tee-Object -FilePath $log
+          }
+          else {
+            & $prepareBat silent qt6 2>&1 |
+              Tee-Object -FilePath $log
+          }
+
+          $code = $LASTEXITCODE
+
+          if ($code -ne 0) {
+            Write-Host ""
+            Write-Host "================================================"
+            Write-Host "PREPARE FAILED - LAST 300 LOG LINES"
+            Write-Host "================================================"
+
+            Get-Content $log -Tail 300 |
+              ForEach-Object { Write-Host $_ }
+
+            throw "Telegram dependency preparation failed with exit code $code."
+          }
+
+          $builtCount = (
+            Select-String `
+              -Path $log `
+              -SimpleMatch "BUILDING:" `
+              -ErrorAction SilentlyContinue
+          ).Count
+
+          $skipCount = (
+            Select-String `
+              -Path $log `
+              -SimpleMatch "SKIPPING" `
+              -ErrorAction SilentlyContinue
+          ).Count
+
+          Write-Host ""
+          Write-Host "Prepare summary:"
+          Write-Host "  BUILDING stages : $builtCount"
+          Write-Host "  SKIPPING stages : $skipCount"
+
+      - name: Upload prepare log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-v7.3.1-Prepare-Log-${{ inputs.build_type || 'Release' }}
+          path: prepare-telegram-libraries.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ------------------------------------------------------------
+      # Upstream-style disk cleanup after library preparation.
+      # ------------------------------------------------------------
+      - name: Compact completed dependencies before saving caches
+        shell: bash
+        run: |
+          find "$LibrariesPath" \
+          '(' \
+            '(' \
+              ! '(' \
+                -name '*.lib' \
+                -o -name '*.a' \
+                -o -name '*.exe' \
+                -o -name '*.h' \
+                -o -name '*.hpp' \
+                -o -name '*.inc' \
+                -o -name '*.cmake' \
+                -o -name '*.pc' \
+                -o -path '*/include/*' \
+                -o -path '*/objects-*' \
+                -o -path '*/cache_keys/*' \
+                -o -path '*/patches/*' \
+                -o -path '*/nv-codec-headers/*' \
+              ')' \
+              -type f \
+            ')' \
+            -o -empty \
+          ')' -delete
+
+      # Save immediately after prepare succeeds so a later C++ failure
+      # does not discard hours of dependency work.
+      - name: Save ThirdParty cache
+        if: steps.prepare-libraries.outcome == 'success' && steps.cache-thirdparty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-${{ runner.arch }}-td-v731-v6-${{ env.BUILD_TYPE }}-third-party-${{ env.CACHE_KEY }}
+
+      - name: Save Libraries cache
+        if: steps.prepare-libraries.outcome == 'success' && steps.cache-libraries.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-td-v731-v6-${{ env.BUILD_TYPE }}-libs-${{ env.CACHE_KEY }}
+
+      - name: Save Qt6 cache
+        if: steps.prepare-libraries.outcome == 'success' && steps.cache-qt6.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-td-v731-v6-${{ env.BUILD_TYPE }}-qt6-${{ env.CACHE_KEY }}
+
+      # ------------------------------------------------------------
+      # Build.
+      #
+      # Auto-update is disabled so the official updater cannot replace
+      # the patched binary. Crash reporting is disabled because this is
+      # not an official Telegram-produced executable.
+      #
+      # IPO/LTO is disabled to lower Release memory use on GitHub's
+      # hosted runner.
+      # ------------------------------------------------------------
+      - name: Check free space before compiling Telegram
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $buildDrive = [System.IO.Path]::GetPathRoot($env:TBUILD).Substring(0, 1)
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, Root, @{n="FreeGiB";e={[math]::Round($_.Free / 1GB, 2)}}
+          if ((Get-PSDrive C).Free -lt 3GB -or (Get-PSDrive $buildDrive).Free -lt 20GB) {
+            throw "Insufficient headroom after dependency preparation: require 3 GiB on C: and 20 GiB on the build drive."
+          }
+
+      - name: Configure and build Telegram Desktop
+        run: |
+          cd /d "%TBUILD%\tdesktop\Telegram"
+
+          call configure.bat ^
+            -G "Ninja Multi-Config" ^
+            qt6 ^
+            -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+            -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
+            -D CMAKE_CONFIGURATION_TYPES=%BUILD_TYPE% ^
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+            -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+            -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF ^
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+          if errorlevel 1 exit /b %errorlevel%
+
+          cmake --build ..\out ^
+            --config %BUILD_TYPE% ^
+            --target Telegram ^
+            --parallel 2
+
+          if errorlevel 1 exit /b %errorlevel%
+
+      # ------------------------------------------------------------
+      # Create a self-contained portable folder.
+      #
+      # -workdir explicitly keeps tdata beside Telegram.exe.
+      # Include the official v7.3.1 Direct3D compiler for compatibility.
+      # ------------------------------------------------------------
+      - name: Validate and package portable build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $out = Join-Path `
+            $env:TBUILD `
+            "tdesktop\out\$env:BUILD_TYPE"
+
+          $exe = Join-Path $out "Telegram.exe"
+
+          if (!(Test-Path $exe)) {
+            Write-Host "Expected executable:"
+            Write-Host "  $exe"
+            Write-Host ""
+            Write-Host "tdesktop\out contents:"
+
+            Get-ChildItem `
+              (Join-Path $env:TBUILD "tdesktop\out") `
+              -Depth 2 `
+              -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host $_.FullName
+              }
+
+            throw "Telegram.exe not found."
+          }
+
+          # --------------------------------------------------------
+          # Loader dependency audit.
+          # Telegram's Qt build is static. The v5 prepare hotfix also
+          # disables normal ICU and Windows-SDK ICU.
+          # --------------------------------------------------------
+          $deps = (
+            & dumpbin.exe /dependents $exe 2>&1 |
+            Out-String
+          )
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin /dependents failed."
+          }
+
+          Write-Host ""
+          Write-Host "========== Telegram.exe dependencies =========="
+          Write-Host $deps
+          Write-Host "================================================"
+
+          $forbidden = @(
+            '(?im)^\s*icu\.dll\s*$',
+            '(?im)^\s*icuuc[0-9]*\.dll\s*$',
+            '(?im)^\s*icuin[0-9]*\.dll\s*$',
+            '(?im)^\s*icudt[0-9]*\.dll\s*$',
+            '(?im)^\s*Qt6Core\.dll\s*$',
+            '(?im)^\s*Qt6Gui\.dll\s*$',
+            '(?im)^\s*Qt6Widgets\.dll\s*$'
+          )
+
+          foreach ($pattern in $forbidden) {
+            if ($deps -match $pattern) {
+              throw "Unexpected dynamic dependency matched: $pattern"
+            }
+          }
+
+          # --------------------------------------------------------
+          # Short loader/startup smoke test using an isolated workdir.
+          # If a required DLL is missing, the process exits immediately.
+          # --------------------------------------------------------
+          $smokeDir = Join-Path `
+            $env:RUNNER_TEMP `
+            "telegram-v731-smoke"
+
+          if (Test-Path $smokeDir) {
+            Remove-Item `
+              $smokeDir `
+              -Recurse `
+              -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $smokeDir `
+            -Force |
+            Out-Null
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -ArgumentList @("-workdir", $smokeDir) `
+            -PassThru
+
+          Start-Sleep -Seconds 8
+          $process.Refresh()
+
+          if ($process.HasExited) {
+            throw "Telegram.exe exited during the 8-second startup smoke test. Exit code: $($process.ExitCode)"
+          }
+
+          Stop-Process `
+            -Id $process.Id `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          # --------------------------------------------------------
+          # Portable package.
+          # --------------------------------------------------------
+          $dist = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "dist"
+
+          $portable = Join-Path `
+            $dist `
+            "Telegram-Patched-Portable"
+
+          if (Test-Path $dist) {
+            Remove-Item `
+              $dist `
+              -Recurse `
+              -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $portable `
+            -Force |
+            Out-Null
+
+          Copy-Item `
+            $exe `
+            "$portable\Telegram.exe" `
+            -Force
+
+          # Pin the D3D compiler to the one shipped in Telegram's official
+          # v7.3.1 x64 portable release. The archive digest is pinned below.
+          $officialPortableUrl = "https://github.com/telegramdesktop/tdesktop/releases/download/v7.3.1/td-portable-win-x64-7.3.1.zip"
+          $officialPortableSha256 = "e3ec293ecadce43aab947e8ef274456529e634a6841e6b661eca6efe600ffcda"
+          $officialPortableZip = Join-Path $env:RUNNER_TEMP "td-v7.3.1-official-portable.zip"
+          Invoke-WebRequest -Uri $officialPortableUrl -OutFile $officialPortableZip
+
+          $downloadedArchiveSha256 = (Get-FileHash -Algorithm SHA256 -Path $officialPortableZip).Hash.ToLowerInvariant()
+          if ($downloadedArchiveSha256 -ne $officialPortableSha256) {
+            throw "Official Telegram portable ZIP SHA-256 mismatch."
+          }
+
+          $moduleDirectory = Join-Path $portable "modules\x64\d3d"
+          New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+          $modulePath = Join-Path $moduleDirectory "d3dcompiler_47.dll"
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $officialArchive = [System.IO.Compression.ZipFile]::OpenRead($officialPortableZip)
+          try {
+            $moduleEntry = $officialArchive.Entries |
+              Where-Object {
+                ($_.FullName -replace '\\', '/') -match '(^|/)modules/x64/d3d/d3dcompiler_47\.dll$'
+              } |
+              Select-Object -First 1
+
+            if ($null -eq $moduleEntry) {
+              throw "Official Telegram portable ZIP does not contain the expected x64 D3D compiler."
+            }
+
+            $sourceStream = $moduleEntry.Open()
+            try {
+              $destinationStream = [System.IO.File]::Create($modulePath)
+              try {
+                $sourceStream.CopyTo($destinationStream)
+              }
+              finally {
+                $destinationStream.Dispose()
+              }
+            }
+            finally {
+              $sourceStream.Dispose()
+            }
+          }
+          finally {
+            $officialArchive.Dispose()
+          }
+
+          Remove-Item -LiteralPath $officialPortableZip -Force
+          $moduleLength = (Get-Item -LiteralPath $modulePath).Length
+          if ($moduleLength -lt 1MB) {
+            throw "Extracted D3D compiler is unexpectedly small: $moduleLength bytes."
+          }
+          $moduleSha256 = (Get-FileHash -Algorithm SHA256 -Path $modulePath).Hash.ToLowerInvariant()
+          Write-Host "Bundled official d3dcompiler_47.dll ($moduleLength bytes, SHA-256 $moduleSha256)."
+
+          # Copy only runtime files emitted beside Telegram.exe.
+          Get-ChildItem `
+            $out `
+            -Filter "*.dll" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Copy-Item `
+                $_.FullName `
+                $portable `
+                -Force
+            }
+
+          $modules = Join-Path $out "modules"
+
+          if (Test-Path $modules) {
+            Copy-Item `
+              $modules `
+              "$portable\modules" `
+              -Recurse `
+              -Force
+          }
+
+          Copy-Item `
+            "$env:GITHUB_WORKSPACE\PATCHES-APPLIED.txt" `
+            "$portable\PATCHES-APPLIED.txt" `
+            -Force
+
+          Copy-Item `
+            "$env:GITHUB_WORKSPACE\BUILD-TOOLING-HOTFIXES.txt" `
+            "$portable\BUILD-TOOLING-HOTFIXES.txt" `
+            -Force
+
+          $deps |
+            Set-Content `
+              "$portable\Telegram.exe.dependencies.txt" `
+              -Encoding utf8
+
+          New-Item `
+            -ItemType Directory `
+            -Path "$portable\patches" `
+            -Force |
+            Out-Null
+
+          Copy-Item `
+            "$env:GITHUB_WORKSPACE\generated-patches\*.patch" `
+            "$portable\patches\" `
+            -Force
+
+          @'
+          @echo off
+          cd /d "%~dp0" || exit /b 1
+          start "" "%~dp0Telegram.exe" -workdir .
+          '@ |
+            Set-Content `
+              "$portable\Start-Telegram.cmd" `
+              -Encoding ascii
+
+          @"
+          Telegram Desktop Patched Portable
+
+          Ref:
+          $env:TDESKTOP_REF
+
+          Commit:
+          $env:TDESKTOP_SHA
+
+          Build:
+          Windows x64 / Qt6 / $env:BUILD_TYPE
+
+          Qt:
+          static
+          static-runtime
+          ICU disabled
+          Windows SDK ICU disabled
+
+          Auto-update:
+          disabled
+
+          D3D compiler:
+          modules/x64/d3d/d3dcompiler_47.dll
+          Source: official Telegram Desktop v7.3.1 x64 portable package
+          Official archive SHA256: $officialPortableSha256
+          Module SHA256: $moduleSha256
+
+          Crash reporting:
+          disabled
+
+          Portable profile:
+          Start-Telegram.cmd uses -workdir beside Telegram.exe
+
+          IMPORTANT:
+          Back up tdata before copying it here.
+          Do not run multiple clients against the same physical tdata
+          directory at the same time.
+          "@ |
+            Set-Content `
+              "$portable\BUILD-INFO.txt" `
+              -Encoding utf8
+
+          $zipName = "Telegram-Patched-v7.3.1-win64-$($env:BUILD_TYPE)-portable.zip"
+          $zip = Join-Path $dist $zipName
+
+          Compress-Archive `
+            -Path "$portable\*" `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal
+
+          # --------------------------------------------------------
+          # Verify the actual ZIP, not just the source folder.
+          # --------------------------------------------------------
+          $verify = Join-Path `
+            $env:RUNNER_TEMP `
+            "telegram-v731-zip-verify"
+
+          if (Test-Path $verify) {
+            Remove-Item `
+              $verify `
+              -Recurse `
+              -Force
+          }
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $verify `
+            -Force
+
+          foreach ($required in @(
+            "Telegram.exe",
+            "Start-Telegram.cmd",
+            "BUILD-INFO.txt",
+            "Telegram.exe.dependencies.txt",
+            "modules\x64\d3d\d3dcompiler_47.dll"
+          )) {
+            if (!(Test-Path (Join-Path $verify $required))) {
+              throw "ZIP validation failed. Missing: $required"
+            }
+          }
+
+          $verifiedModuleSha256 = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $verify "modules\x64\d3d\d3dcompiler_47.dll")).Hash.ToLowerInvariant()
+
+          if ($verifiedModuleSha256 -ne $moduleSha256) {
+            throw "ZIP validation failed: bundled D3D compiler hash changed."
+          }
+
+          $zipHash = (
+            Get-FileHash `
+              -Algorithm SHA256 `
+              -Path $zip
+          ).Hash.ToLower()
+
+          "$zipHash *$zipName" |
+            Set-Content `
+              "$zip.sha256" `
+              -Encoding ascii
+
+          $exeHash = (
+            Get-FileHash `
+              -Algorithm SHA256 `
+              -Path "$portable\Telegram.exe"
+          ).Hash.ToLower()
+
+          "$exeHash *Telegram.exe" |
+            Set-Content `
+              "$dist\Telegram.exe.sha256" `
+              -Encoding ascii
+
+          "PACKAGE_NAME=$zipName" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          "PACKAGE_SHA256=$zipHash" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host ""
+          Write-Host "Portable package verified."
+          Write-Host "Package: $zipName"
+          Write-Host "SHA256 : $zipHash"
+
+      # ------------------------------------------------------------
+      # Useful provenance/debugging artifact even if you later compare
+      # builds independently.
+      # ------------------------------------------------------------
+      - name: Upload patched source diff
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-v7.3.1-Patched-Diff
+          path: |
+            TDESKTOP-PATCHED-DIFF.patch
+            PATCHES-APPLIED.txt
+            BUILD-TOOLING-HOTFIXES.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Portable build
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-Patched-v7.3.1-Win64-${{ inputs.build_type || 'Release' }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          @"
+          ## Telegram Desktop patched build
+
+          - **Upstream:** `$env:TDESKTOP_REF`
+          - **Commit:** `$env:TDESKTOP_SHA`
+          - **Build:** `$env:BUILD_TYPE`
+          - **Architecture:** `x64`
+          - **Qt:** `Qt6`
+          - **Package:** `$env:PACKAGE_NAME`
+          - **SHA256:** `$env:PACKAGE_SHA256`
+          - **Auto-update:** disabled
+          - **Crash reports:** disabled
+          - **Patches:** 5
+          "@ |
+            Out-File `
+              -FilePath $env:GITHUB_STEP_SUMMARY `
+              -Append `
+              -Encoding utf8
+

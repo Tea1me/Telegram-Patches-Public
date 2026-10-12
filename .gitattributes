@@ -1,0 +1,8 @@
+# Keep patch/workflow text deterministic on Windows runners.
+*.patch text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+tools/*.py text eol=lf

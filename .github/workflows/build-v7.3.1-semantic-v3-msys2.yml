@@ -1123,6 +1123,9 @@ jobs:
         run: |
           cd /d "%TBUILD%\tdesktop\Telegram"
 
+          set "TELEGRAM_BUILD_LOG=%RUNNER_TEMP%\telegram-v731-build.log"
+          if exist "%TELEGRAM_BUILD_LOG%" del "%TELEGRAM_BUILD_LOG%"
+
           call configure.bat ^
             -G "Ninja Multi-Config" ^
             qt6 ^
@@ -1133,16 +1136,44 @@ jobs:
             -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
             -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF ^
             -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
-            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON > "%TELEGRAM_BUILD_LOG%" 2>&1
 
-          if errorlevel 1 exit /b %errorlevel%
+          if errorlevel 1 (
+            type "%TELEGRAM_BUILD_LOG%" | powershell -NoProfile -Command "$input | Select-Object -Last 160 | ForEach-Object { Write-Host $_ }"
+            exit /b 1
+          )
 
           cmake --build ..\out ^
             --config %BUILD_TYPE% ^
             --target Telegram ^
-            --parallel 2
+            --parallel 2 >> "%TELEGRAM_BUILD_LOG%" 2>&1
 
-          if errorlevel 1 exit /b %errorlevel%
+          if errorlevel 1 (
+            type "%TELEGRAM_BUILD_LOG%" | powershell -NoProfile -Command "$input | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }"
+            exit /b 1
+          )
+
+          echo Telegram configure and build completed successfully.
+
+      - name: Preserve build failure diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "telegram-v731-build.log"
+          if (!(Test-Path -LiteralPath $log)) {
+            Write-Host "No compiler log file was created."
+            exit 0
+          }
+          $tail = @(Get-Content -LiteralPath $log -Tail 200)
+          Write-Host "===== Telegram build log tail ====="
+          $tail | ForEach-Object { Write-Host $_ }
+          @"
+          ## Telegram build failure log (last 200 lines)
+
+          ```text
+          $($tail -join "`n")
+          ```
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       # ------------------------------------------------------------
       # Create a self-contained portable folder.

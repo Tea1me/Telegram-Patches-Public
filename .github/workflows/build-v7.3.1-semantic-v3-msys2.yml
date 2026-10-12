@@ -3,6 +3,11 @@ name: Build Telegram Desktop Patched Portable
 run-name: "Telegram Desktop v7.3.1 / ${{ inputs.build_type || 'Release' }}"
 
 on:
+  push:
+    branches:
+      - v7.3.1
+    paths:
+      - .github/workflows/build-v7.3.1-semantic-v3-msys2.yml
   workflow_dispatch:
     inputs:
       build_type:
@@ -36,8 +41,9 @@ jobs:
     runs-on: windows-2025-vs2026
     timeout-minutes: 360
     env:
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      # Public staging fallback: Telegram upstream documents these as TEST ONLY credentials.
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID || '17349' }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH || '344583e45741c457fe1862106095a5eb' }}
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
       CCACHE_DISABLE: "1"
 

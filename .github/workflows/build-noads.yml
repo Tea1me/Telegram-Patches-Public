@@ -1,0 +1,1017 @@
+name: Build Auto-Forward-Ported Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "目标 TDesktop ref；留空=最新 stable release"
+        required: false
+        default: ""
+        type: string
+
+      build_type:
+        description: "Build type"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+env:
+  TDESKTOP_REPO: https://github.com/telegramdesktop/tdesktop.git
+  PATCH_REPO: https://github.com/Tea1me/telegram-desktop-patches.git
+
+  BUILD_TYPE: ${{ inputs.build_type || 'Release' }}
+  PREPARE_PATH: Telegram/build/prepare/prepare.py
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      # ============================================================
+      # Checkout controller repo.
+      # 你的仓库可以仍然只有 workflow。
+      # ============================================================
+      - name: Checkout builder repository
+        uses: actions/checkout@v7
+        with:
+          path: controller
+
+      - name: Validate Telegram API secrets
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_ID)) {
+            throw "Missing Actions secret: TDESKTOP_API_ID"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_HASH)) {
+            throw "Missing Actions secret: TDESKTOP_API_HASH"
+          }
+
+      # ============================================================
+      # Prepare TBuild exactly like upstream Telegram Desktop CI.
+      # ============================================================
+      - name: Prepare directories
+        run: |
+          if not exist "%userprofile%\TBuild\Libraries" mkdir "%userprofile%\TBuild\Libraries"
+
+          if exist "%GITHUB_WORKSPACE%\TBuild" rmdir "%GITHUB_WORKSPACE%\TBuild"
+
+          mklink /d "%GITHUB_WORKSPACE%\TBuild" "%userprofile%\TBuild"
+
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      # ============================================================
+      # Clone current Layerex patch repository.
+      # ============================================================
+      - name: Clone Layerex patches
+        shell: pwsh
+        run: |
+          git clone `
+            --depth 1 `
+            "${{ env.PATCH_REPO }}" `
+            "$env:TBUILD\layerex"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to clone Layerex repository."
+          }
+
+          $sha = (
+            git -C "$env:TBUILD\layerex" rev-parse HEAD
+          ).Trim()
+
+          "LAYEREX_SHA=$sha" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "Layerex commit: $sha"
+
+      # ============================================================
+      # Resolve:
+      #
+      # SOURCE_REF = Layerex's original supported TDesktop version
+      # TARGET_REF = latest official stable release
+      #
+      # Example:
+      #
+      # source: v5.10.3
+      # target: v7.x.x
+      # ============================================================
+      - name: Resolve source and target versions
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --------------------------------------------
+          # Layerex source/base version.
+          # --------------------------------------------
+
+          $pkgbuild = Join-Path `
+            $env:TBUILD `
+            "layerex\PKGBUILD"
+
+          $line = Get-Content $pkgbuild |
+            Where-Object {
+              $_ -match '^pkgver=(.+)$'
+            } |
+            Select-Object -First 1
+
+          if (!$line) {
+            throw "pkgver not found in Layerex PKGBUILD."
+          }
+
+          $null = $line -match '^pkgver=(.+)$'
+
+          $sourceVersion = $Matches[1].Trim()
+          $sourceVersion = $sourceVersion.Trim('"')
+          $sourceVersion = $sourceVersion.Trim("'")
+
+          $sourceRef = "v$sourceVersion"
+
+          # --------------------------------------------
+          # Target/latest stable.
+          # --------------------------------------------
+
+          $requested = "${{ inputs.target_ref }}"
+
+          if ([string]::IsNullOrWhiteSpace($requested)) {
+
+            $headers = @{
+              "Accept" = "application/vnd.github+json"
+              "Authorization" = "Bearer $env:GH_TOKEN"
+              "X-GitHub-Api-Version" = "2022-11-28"
+              "User-Agent" = "telegram-patch-builder"
+            }
+
+            $release = Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/telegramdesktop/tdesktop/releases/latest" `
+              -Headers $headers
+
+            $targetRef = $release.tag_name
+
+          } else {
+
+            $targetRef = $requested
+          }
+
+          Write-Host "Layerex base : $sourceRef"
+          Write-Host "Target       : $targetRef"
+
+          "SOURCE_REF=$sourceRef" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          "TARGET_REF=$targetRef" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ============================================================
+      # Create a lightweight TDesktop git repository containing only
+      # the two revisions we actually need.
+      #
+      # This avoids cloning the entire Telegram Desktop history.
+      # ============================================================
+      - name: Fetch source and target TDesktop revisions
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:TBUILD "tdesktop"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $repo `
+            -Force |
+            Out-Null
+
+          git -C $repo init
+          git -C $repo config core.autocrlf false
+          git -C $repo config core.eol lf
+          git -C $repo remote add origin "${{ env.TDESKTOP_REPO }}"
+
+          # --------------------------------------------
+          # Fetch original Layerex base.
+          # --------------------------------------------
+
+          git -C $repo fetch `
+            --depth=1 `
+            origin `
+            "$env:SOURCE_REF"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to fetch source ref $env:SOURCE_REF"
+          }
+
+          $sourceSha = (
+            git -C $repo rev-parse FETCH_HEAD
+          ).Trim()
+
+          git -C $repo tag migration-source $sourceSha
+
+          # --------------------------------------------
+          # Fetch current target.
+          # --------------------------------------------
+
+          git -C $repo fetch `
+            --depth=1 `
+            origin `
+            "$env:TARGET_REF"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to fetch target ref $env:TARGET_REF"
+          }
+
+          $targetSha = (
+            git -C $repo rev-parse FETCH_HEAD
+          ).Trim()
+
+          git -C $repo tag migration-target $targetSha
+
+          "SOURCE_SHA=$sourceSha" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          "TARGET_SHA=$targetSha" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "Source SHA: $sourceSha"
+          Write-Host "Target SHA: $targetSha"
+
+
+      - name: Install GNU patch
+        shell: pwsh
+        run: |
+          choco install patch -y --no-progress
+      
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install GNU patch."
+          }
+      
+          patch --version
+      # ============================================================
+      # Convert the old Layerex patches into proper Git commits.
+      #
+      # --recount fixes Layerex patches whose @@ line counts were
+      # manually edited and are no longer correct.
+      #
+      # After this step, we no longer depend on malformed patch
+      # formatting: the actual changes live as normal Git commits.
+      # ============================================================
+      - name: Canonicalize Layerex patches
+        shell: bash
+        run: |
+          set -euo pipefail
+      
+          repo="$TBUILD/tdesktop"
+      
+          # IMPORTANT:
+          # Use the ORIGINAL Layerex patches.
+          patches="$TBUILD/layerex"
+      
+          cd "$repo"
+      
+          git config user.name "Telegram Patch Bot"
+          git config user.email "actions@github.com"
+          git config core.autocrlf false
+          git config core.eol lf
+      
+          git checkout -B source-patched migration-source
+      
+          mapfile -t files < <(
+            find "$patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '[0-9][0-9][0-9][0-9]-*.patch' \
+              | sort
+          )
+      
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Layerex patches found."
+            exit 1
+          fi
+      
+          echo "Found ${#files[@]} Layerex patches."
+      
+          commits_file="$GITHUB_WORKSPACE/source-commits.txt"
+          : > "$commits_file"
+      
+          rm -rf "$GITHUB_WORKSPACE/source-canonical-patches"
+          mkdir -p "$GITHUB_WORKSPACE/source-canonical-patches"
+      
+          index=0
+      
+          for patchfile in "${files[@]}"; do
+            index=$((index + 1))
+      
+            filename="$(basename "$patchfile")"
+      
+            subject="$(
+              basename "$patchfile" .patch |
+              sed -E 's/^[0-9]+-//' |
+              tr '-' ' '
+            )"
+      
+            echo
+            echo "=============================================="
+            echo "Layerex patch $index/${#files[@]}"
+            echo "$filename"
+            echo "=============================================="
+      
+            # ----------------------------------------------------------
+            # IMPORTANT:
+            #
+            # Layerex itself uses GNU patch, not git apply.
+            #
+            # First do a dry run.  This checks whether GNU patch can
+            # actually apply the source patch to its intended base.
+            # ----------------------------------------------------------
+            echo "Dry-run..."
+      
+            if ! patch \
+                --batch \
+                --forward \
+                --strip=1 \
+                --dry-run \
+                < "$patchfile"; then
+      
+              echo
+              echo "=============================================="
+              echo "GNU PATCH DRY-RUN FAILED"
+              echo "=============================================="
+              echo
+              echo "Patch:"
+              echo "$filename"
+              echo
+              echo "Telegram base:"
+              echo "$SOURCE_REF"
+              echo
+              echo "Telegram SHA:"
+              git rev-parse HEAD
+              echo
+      
+              exit 1
+            fi
+      
+            echo
+            echo "Applying with GNU patch..."
+      
+            patch \
+              --batch \
+              --forward \
+              --strip=1 \
+              < "$patchfile"
+      
+            # ----------------------------------------------------------
+            # Now that the *changes* are applied, Git takes over.
+            #
+            # We no longer care that the Layerex source patch had weird
+            # hunk metadata.  Git sees only the resulting source tree.
+            # ----------------------------------------------------------
+            git diff --check
+      
+            git add -A
+      
+            if git diff --cached --quiet; then
+              echo
+              echo "Patch produced no source changes:"
+              echo "$filename"
+              exit 1
+            fi
+      
+            git commit \
+              -m "Layerex: $subject"
+      
+            commit="$(
+              git rev-parse HEAD
+            )"
+      
+            echo "$commit" >> "$commits_file"
+      
+            echo
+            echo "Created canonical commit:"
+            echo "$commit"
+      
+            echo
+            echo "Commit summary:"
+            git show \
+              --stat \
+              --oneline \
+              --no-renames \
+              HEAD
+          done
+      
+          echo
+          echo "=============================================="
+          echo "Canonicalized Layerex history"
+          echo "=============================================="
+      
+          git log \
+            --oneline \
+            --reverse \
+            migration-source..HEAD
+      
+          echo
+          echo "Generating clean Git patches..."
+      
+          git format-patch \
+            --no-signature \
+            --output-directory \
+              "$GITHUB_WORKSPACE/source-canonical-patches" \
+            migration-source..HEAD
+      
+          echo
+          echo "Generated canonical source patches:"
+      
+          find "$GITHUB_WORKSPACE/source-canonical-patches" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.patch' \
+            -print \
+            | sort
+      
+          echo "PATCH_COUNT=${#files[@]}" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # Forward-port.
+      #
+      # This is the important part:
+      #
+      # source patch
+      #     ↓
+      # source Git commit
+      #     ↓
+      # cherry-pick onto latest target
+      #
+      # Git now has original/base/latest blobs available, so it can
+      # do a real 3-way merge rather than fuzzy patch matching.
+      # ============================================================
+      - name: Forward-port patches to latest TDesktop
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repo="$TBUILD/tdesktop"
+
+          cd "$repo"
+
+          git checkout -B forward-port migration-target
+
+          mkdir -p "$GITHUB_WORKSPACE/migration-debug"
+
+          cp \
+            "$GITHUB_WORKSPACE/source-commits.txt" \
+            "$GITHUB_WORKSPACE/migration-debug/"
+
+          {
+            echo "Layerex commit:"
+            echo "$LAYEREX_SHA"
+            echo
+            echo "Source:"
+            echo "$SOURCE_REF"
+            echo "$SOURCE_SHA"
+            echo
+            echo "Target:"
+            echo "$TARGET_REF"
+            echo "$TARGET_SHA"
+          } > "$GITHUB_WORKSPACE/migration-debug/versions.txt"
+
+          while IFS= read -r commit; do
+
+            [ -n "$commit" ] || continue
+
+            echo
+            echo "=============================================="
+            echo "Forward-porting:"
+            echo "$commit"
+            echo "=============================================="
+
+            if ! git cherry-pick "$commit"; then
+
+              echo
+              echo "=============================================="
+              echo "FORWARD PORT CONFLICT"
+              echo "=============================================="
+
+              git status \
+                > "$GITHUB_WORKSPACE/migration-debug/status.txt" \
+                2>&1 || true
+
+              git status --short \
+                > "$GITHUB_WORKSPACE/migration-debug/status-short.txt" \
+                2>&1 || true
+
+              git diff --name-only --diff-filter=U \
+                > "$GITHUB_WORKSPACE/migration-debug/conflicted-files.txt" \
+                2>&1 || true
+
+              git diff \
+                > "$GITHUB_WORKSPACE/migration-debug/conflict.diff" \
+                2>&1 || true
+
+              git diff --cc \
+                > "$GITHUB_WORKSPACE/migration-debug/conflict-combined.diff" \
+                2>&1 || true
+
+              echo "$commit" \
+                > "$GITHUB_WORKSPACE/migration-debug/failed-commit.txt"
+
+              cp -r \
+                "$GITHUB_WORKSPACE/source-canonical-patches" \
+                "$GITHUB_WORKSPACE/migration-debug/" \
+                || true
+
+              exit 1
+            fi
+          done < "$GITHUB_WORKSPACE/source-commits.txt"
+
+          echo
+          echo "=============================================="
+          echo "Forward-port succeeded"
+          echo "=============================================="
+
+          git log \
+            --oneline \
+            --reverse \
+            migration-target..HEAD
+
+          FORWARD_TREE="$(
+            git rev-parse HEAD^{tree}
+          )"
+
+          echo "FORWARD_TREE=$FORWARD_TREE" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # If automatic migration fails, preserve enough information
+      # to manually fix only the conflicting feature.
+      # ============================================================
+      - name: Upload migration conflict report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-Patch-Migration-Conflict
+          path: |
+            migration-debug/**
+            source-canonical-patches/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ============================================================
+      # Generate brand-new canonical patches against CURRENT target.
+      #
+      # These are NOT the old Layerex patches anymore.
+      #
+      # They are fresh git-format-patch files whose base is the latest
+      # official Telegram Desktop tag.
+      # ============================================================
+      - name: Generate new patches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          rm -rf "$GITHUB_WORKSPACE/generated-patches"
+
+          mkdir -p "$GITHUB_WORKSPACE/generated-patches"
+
+          git format-patch \
+            --no-signature \
+            --output-directory \
+              "$GITHUB_WORKSPACE/generated-patches" \
+            migration-target..HEAD
+
+          count="$(
+            find "$GITHUB_WORKSPACE/generated-patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | wc -l
+          )"
+
+          echo "Generated $count new patches."
+
+          if [ "$count" -ne "$PATCH_COUNT" ]; then
+            echo \
+              "Expected $PATCH_COUNT patches but generated $count."
+            exit 1
+          fi
+
+          {
+            echo "Generated from Layerex:"
+            echo "$LAYEREX_SHA"
+            echo
+            echo "Original Layerex base:"
+            echo "$SOURCE_REF"
+            echo "$SOURCE_SHA"
+            echo
+            echo "New target:"
+            echo "$TARGET_REF"
+            echo "$TARGET_SHA"
+            echo
+            echo "Generated:"
+          } > "$GITHUB_WORKSPACE/generated-patches/MANIFEST.txt"
+
+          while IFS= read -r patch; do
+            name="$(basename "$patch")"
+
+            hash="$(
+              sha256sum "$patch" |
+              awk '{print $1}'
+            )"
+
+            {
+              echo "$name"
+              echo "SHA256: $hash"
+              echo
+            } >> "$GITHUB_WORKSPACE/generated-patches/MANIFEST.txt"
+
+          done < <(
+            find "$GITHUB_WORKSPACE/generated-patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | sort
+          )
+
+          cat "$GITHUB_WORKSPACE/generated-patches/MANIFEST.txt"
+
+      # ============================================================
+      # Self-test generated patches.
+      #
+      # Throw away the working branch and start again from a CLEAN
+      # target tree, then git-am the newly generated patches.
+      #
+      # If this fails, no build takes place.
+      # ============================================================
+      - name: Verify generated patches from clean target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          git checkout -B verify-generated migration-target
+
+          git am --abort 2>/dev/null || true
+
+          mapfile -t patches < <(
+            find "$GITHUB_WORKSPACE/generated-patches" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              | sort
+          )
+
+          git am --3way "${patches[@]}"
+
+          git diff migration-target..HEAD --check
+
+          VERIFY_TREE="$(
+            git rev-parse HEAD^{tree}
+          )"
+
+          echo "Forward-port tree : $FORWARD_TREE"
+          echo "Verified tree     : $VERIFY_TREE"
+
+          if [ "$VERIFY_TREE" != "$FORWARD_TREE" ]; then
+            echo "Generated patches do not recreate identical tree."
+            exit 1
+          fi
+
+          echo
+          echo "Generated patches verified successfully."
+
+      # ============================================================
+      # Upload patches NOW.
+      #
+      # Even if the huge Windows compilation later fails/OOMs, you
+      # still get the freshly generated patch set.
+      # ============================================================
+      - name: Upload generated patches
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-Patches-${{ env.TARGET_REF }}
+          path: generated-patches/**
+          if-no-files-found: error
+          retention-days: 30
+
+      # ============================================================
+      # Initialize TDesktop submodules only AFTER patch migration.
+      #
+      # No point downloading them if forward-porting failed.
+      # ============================================================
+      - name: Initialize Telegram submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$TBUILD/tdesktop"
+
+          git submodule update \
+            --init \
+            --recursive \
+            --depth 1
+
+      # ============================================================
+      # Detect build requirements from TARGET source.
+      # ============================================================
+      - name: Detect build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DOCPATH="$TBUILD/tdesktop/docs/building-win.md"
+
+          SDK="$(
+            grep "SDK version" "$DOCPATH" |
+            sed -n -r \
+              's/.*\*\*([0-9.]+)\*\* SDK version.*/\1/p' |
+            head -n 1
+          )"
+
+          if [ -z "$SDK" ]; then
+            echo "Unable to detect Windows SDK."
+            exit 1
+          fi
+
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+
+          sed -i \
+            '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' \
+            "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          {
+            sha256sum \
+              "$TBUILD/tdesktop/$PREPARE_PATH"
+
+            echo "$SDK"
+            echo "$TARGET_SHA"
+          } > "$GITHUB_WORKSPACE/CACHE_KEY.txt"
+
+          CACHE_KEY="$(
+            sha256sum "$GITHUB_WORKSPACE/CACHE_KEY.txt" |
+            awk '{print $1}'
+          )"
+
+          echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_ENV"
+
+          echo "SDK: $SDK"
+
+      # ============================================================
+      # Official-style MSVC environment.
+      # ============================================================
+      - name: Setup MSVC
+        uses: Eden-CI/msvc-dev-cmd@master
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+          toolset: "14.44"
+
+      - name: Configure NuGet
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      # ============================================================
+      # Cache build dependencies only.
+      #
+      # Telegram source + Layerex source are freshly fetched each run.
+      # ============================================================
+      - name: Restore ThirdParty cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.os }}-${{ runner.arch }}-td-thirdparty-${{ env.CACHE_KEY }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-td-thirdparty-
+
+      - name: Restore Libraries cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.os }}-x64-td-libs-${{ env.CACHE_KEY }}
+          restore-keys: |
+            ${{ runner.os }}-x64-td-libs-
+
+      - name: Restore Qt6 cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.os }}-x64-td-qt6-${{ env.CACHE_KEY }}
+          restore-keys: |
+            ${{ runner.os }}-x64-td-qt6-
+
+      # ============================================================
+      # Prepare official TDesktop Windows dependencies.
+      # ============================================================
+      - name: Prepare libraries
+        run: |
+          "%TBUILD%\tdesktop\Telegram\build\prepare\win.bat" skip-release silent qt6
+
+      # ============================================================
+      # Save runner disk.
+      # Same basic strategy used by upstream Windows CI.
+      # ============================================================
+      - name: Free disk space
+        shell: bash
+        run: |
+          find "$LibrariesPath" \
+          '(' \
+            '(' \
+              ! '(' \
+                -name '*.lib' \
+                -o -name '*.a' \
+                -o -name '*.exe' \
+                -o -name '*.h' \
+                -o -name '*.hpp' \
+                -o -name '*.inc' \
+                -o -name '*.cmake' \
+                -o -name '*.pc' \
+                -o -path '*/include/*' \
+                -o -path '*/objects-*' \
+                -o -path '*/cache_keys/*' \
+                -o -path '*/patches/*' \
+                -o -path '*/nv-codec-headers/*' \
+              ')' \
+              -type f \
+            ')' \
+            -o -empty \
+          ')' -delete
+
+      # ============================================================
+      # Build patched current TDesktop.
+      #
+      # Auto-updater disabled because otherwise the official updater
+      # can replace the patched executable.
+      # ============================================================
+      - name: Build Telegram Desktop
+        run: |
+          cd /d "%TBUILD%\tdesktop\Telegram"
+
+          call configure.bat ^
+            -G "Ninja Multi-Config" ^
+            qt6 ^
+            -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+            -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
+            -D CMAKE_CONFIGURATION_TYPES=%BUILD_TYPE% ^
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+            -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+            -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF ^
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+          if errorlevel 1 exit /b %errorlevel%
+
+          cmake --build ..\out ^
+            --config %BUILD_TYPE% ^
+            --target Telegram ^
+            --parallel 2
+
+          if errorlevel 1 exit /b %errorlevel%
+
+      # ============================================================
+      # Portable package.
+      # ============================================================
+      - name: Create Portable package
+        shell: pwsh
+        run: |
+          $exe = Join-Path `
+            $env:TBUILD `
+            "tdesktop\out\$env:BUILD_TYPE\Telegram.exe"
+
+          if (!(Test-Path $exe)) {
+            throw "Telegram.exe was not produced: $exe"
+          }
+
+          $dist = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "dist"
+
+          $portable = Join-Path `
+            $dist `
+            "Telegram-Patched-Portable"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $portable `
+            -Force |
+            Out-Null
+
+          Copy-Item `
+            $exe `
+            "$portable\Telegram.exe"
+
+          Copy-Item `
+            "$env:GITHUB_WORKSPACE\generated-patches" `
+            "$portable\patches" `
+            -Recurse
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          start "" "%~dp0Telegram.exe" -workdir "%~dp0"
+          '@ |
+            Set-Content `
+              "$portable\Start-Telegram.cmd" `
+              -Encoding ascii
+
+          @"
+          Telegram Desktop Auto-Forward-Ported Build
+
+          Layerex source:
+          https://github.com/Layerex/telegram-desktop-patches
+
+          Layerex commit:
+          $env:LAYEREX_SHA
+
+          Original patch base:
+          $env:SOURCE_REF
+
+          Original base SHA:
+          $env:SOURCE_SHA
+
+          Target Telegram Desktop:
+          $env:TARGET_REF
+
+          Target SHA:
+          $env:TARGET_SHA
+
+          Applied patches:
+          $env:PATCH_COUNT
+
+          Build type:
+          $env:BUILD_TYPE
+
+          Architecture:
+          x64
+
+          Qt:
+          Qt6
+
+          Auto updater:
+          disabled
+
+          Crash reports:
+          disabled
+
+          Generated patches were independently re-applied
+          against a clean target tree before this build.
+          "@ |
+            Set-Content `
+              "$portable\BUILD-INFO.txt" `
+              -Encoding utf8
+
+          $safeRef = (
+            $env:TARGET_REF `
+            -replace '[^0-9A-Za-z._-]', '_'
+          )
+
+          $zipName = `
+            "Telegram-Patched-$safeRef-win64-portable.zip"
+
+          $zip = Join-Path $dist $zipName
+
+          Compress-Archive `
+            -Path "$portable\*" `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal
+
+          $hash = (
+            Get-FileHash `
+              -Algorithm SHA256 `
+              -Path $zip
+          ).Hash.ToLower()
+
+          "$hash *$zipName" |
+            Set-Content `
+              "$zip.sha256" `
+              -Encoding ascii
+
+          Write-Host ""
+          Write-Host "Target : $env:TARGET_REF"
+          Write-Host "ZIP    : $zipName"
+          Write-Host "SHA256 : $hash"
+
+      - name: Upload Portable build
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-Patched-Win64-Portable
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

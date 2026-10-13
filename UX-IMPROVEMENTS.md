@@ -39,10 +39,12 @@ Patch 0007 doubles only the initial per-DC download slots from four 128 KiB part
 
 AyuGram Desktop, Kotatogram, and SereinGram are public Telegram Desktop based projects. Kotatogram documents local folders, a compact chat list, custom fonts, multi-chat forwarding, and proxy auto-rotation. SereinGram has inspectable source for DC latency/status probes and the transfer profile above. These projects target different upstream revisions, so their changes should be ported selectively rather than copied wholesale.
 
+SereinGram's DC status dialog creates one temporary connection to each of the five DCs, reports each connection's ping or failure, and applies a 10-second overall timeout. It measures through the currently selected non-Web proxy when enabled, otherwise directly. This is useful as an on-demand connectivity diagnostic; it does not prove which DC serves a particular media file. Running such probes continuously would add connections and traffic, so a future implementation should stay user-triggered and bounded.
+
 - [AyuGram Desktop source](https://github.com/AyuGram/AyuGramDesktop)
 - [Kotatogram Desktop README and feature list](https://github.com/kotatogram/kotatogram-desktop)
 - [SereinGram feature matrix](https://github.com/eltavine/SereinGram/blob/main/docs/serein/features.md)
-- [SereinGram DC status probe](https://github.com/eltavine/SereinGram/blob/main/Telegram/SourceFiles/serein/network/dc_status.cpp)
+- [SereinGram DC status probe](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/dc_status.cpp)
 
 ## Validation
 

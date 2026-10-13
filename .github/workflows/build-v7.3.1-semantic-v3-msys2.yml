@@ -376,7 +376,7 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 6 ]; then
+          if [ "$count" -ne 7 ]; then
             echo "Expected 7 generated patches, got $count."
             exit 1
           fi

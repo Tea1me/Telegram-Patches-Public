@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tea1me <patches@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 00:00:00 +0000
+Subject: [PATCH] Start downloads with two MTProto sessions
+
+---
+ Telegram/SourceFiles/storage/download_manager_mtproto.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Telegram/SourceFiles/storage/download_manager_mtproto.cpp b/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
+--- a/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
++++ b/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
+@@ -23,4 +23,4 @@
+ constexpr auto kStartWaitedInSession = 4 * kDownloadPartSize;
+ constexpr auto kMaxWaitedInSession = 16 * kDownloadPartSize;
+-constexpr auto kStartSessionsCount = 1;
++constexpr auto kStartSessionsCount = 2;
+ constexpr auto kMaxSessionsCount = 8;

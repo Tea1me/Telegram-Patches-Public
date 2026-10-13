@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tea1me <patches@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 00:00:00 +0000
+Subject: [PATCH] Show main data center in connection settings
+
+---
+ Telegram/SourceFiles/settings/sections/settings_advanced.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -112,13 +112,16 @@ void BuildDataStorageSection(SectionBuilder &builder) {
+ 
+ 	const auto connectionType = [=] {
+ 		const auto transport = account->mtp().dctransport();
++		const auto withDc = [&](QString label) {
++			return label + u" · DC %1"_q.arg(account->mtp().mainDcId());
++		};
+ 		if (!Core::App().settings().proxy().isEnabled()) {
+-			return transport.isEmpty()
++			return withDc(transport.isEmpty()
+ 				? tr::lng_connection_auto_connecting(tr::now)
+-				: tr::lng_connection_auto(tr::now, lt_transport, transport);
++				: tr::lng_connection_auto(tr::now, lt_transport, transport));
+ 		} else {
+-			return transport.isEmpty()
++			return withDc(transport.isEmpty()
+ 				? tr::lng_connection_proxy_connecting(tr::now)
+-				: tr::lng_connection_proxy(tr::now, lt_transport, transport);
++				: tr::lng_connection_proxy(tr::now, lt_transport, transport));
+ 		}
+ 	};
+@@ -128,7 +131,8 @@ void BuildDataStorageSection(SectionBuilder &builder) {
+ 		.icon = { &st::menuIconNetwork },
+ 		.label = rpl::merge(
+ 			Core::App().settings().proxy().connectionTypeChanges(),
+-			tr::lng_connection_auto_connecting() | rpl::to_empty
++			tr::lng_connection_auto_connecting() | rpl::to_empty,
++			account->mtp().mainDcIdValue() | rpl::to_empty
+ 		) | rpl::map(connectionType),
+ 		.onClick = [=] {
+ 			controller->window().show(

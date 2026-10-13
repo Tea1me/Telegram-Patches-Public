@@ -121,8 +121,8 @@ jobs:
               | sort
           )
 
-          if [ "${#patches[@]}" -ne 5 ]; then
-            echo "Expected 5 patch files, found ${#patches[@]}."
+          if [ "${#patches[@]}" -ne 6 ]; then
+            echo "Expected 6 patch files, found ${#patches[@]}."
             exit 1
           fi
 
@@ -245,7 +245,7 @@ jobs:
       # ------------------------------------------------------------
       # Strict patch gate:
       #
-      # - exactly five patches must exist
+      # - exactly six patches must exist
       # - every patch must pass git apply --check
       # - apply in numeric filename order
       # - if any one fails, compilation never starts
@@ -373,8 +373,8 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 5 ]; then
-            echo "Expected 5 generated patches, got $count."
+          if [ "$count" -ne 6 ]; then
+            echo "Expected 6 generated patches, got $count."
             exit 1
           fi
 
@@ -1606,7 +1606,7 @@ jobs:
           - **SHA256:** `$env:PACKAGE_SHA256`
           - **Auto-update:** disabled
           - **Crash reports:** disabled
-          - **Patches:** 5
+          - **Patches:** 6
           "@ |
             Out-File `
               -FilePath $env:GITHUB_STEP_SUMMARY `

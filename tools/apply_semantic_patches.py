@@ -402,9 +402,9 @@ def main() -> int:
         patch_dir.glob("[0-9][0-9][0-9][0-9]-*.patch")
     )
 
-    if len(patch_files) != 5:
+    if len(patch_files) != 6:
         raise RuntimeError(
-            f"Expected 5 input patches, found {len(patch_files)}"
+            f"Expected 6 input patches, found {len(patch_files)}"
         )
 
     run(["git", "config", "user.name", "Telegram Patch Bot"], repo)
@@ -430,7 +430,7 @@ def main() -> int:
     for index, patch_file in enumerate(patch_files, 1):
         print()
         print("=" * 72)
-        print(f"TRANSFORM {index}/5: {patch_file.name}")
+        print(f"TRANSFORM {index}/6: {patch_file.name}")
         print("=" * 72)
 
         sha = hashlib.sha256(patch_file.read_bytes()).hexdigest()

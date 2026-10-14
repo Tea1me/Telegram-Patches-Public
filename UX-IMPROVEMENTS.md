@@ -1,12 +1,16 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline, adds the main-DC label, conservative download acceleration, and an adjustable per-DC download-session policy.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries nine patches total: a main-DC label, conservative download acceleration, an adjustable per-DC download-session policy, and an on-demand DC connectivity check.
 
 ## Implemented
 
 - **Show the main data center in Settings → Advanced → Connection type.** Patch 0006 appends the active account's main DC number and refreshes when that DC changes. Individual media can be served from a different DC, so this is a connection diagnostic, not a per-file route indicator. It does not change routing.
   - [settings_advanced.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/settings/sections/settings_advanced.cpp)
   - [mtp_instance.h at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/mtp_instance.h)
+
+- **Check data-center connectivity on demand (patch 0009).** Settings → Advanced → Data & Storage opens a one-shot test for DC1–DC5, reports connection latency or failure, and marks the account's current main DC. It uses the enabled Telegram proxy except Web proxies, then falls back to a direct connection. The total deadline is 10 seconds; closing the dialog releases active probes. It does not poll in the background, change routing, or identify the DC that serves an individual media file.
+  - Adapted from [SereinGram's DC status probe at pinned commit](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/dc_status.cpp).
+  - TDesktop connection APIs: [connection_abstract.h at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/connection_abstract.h), [mtproto_dc_options.h at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/mtproto_dc_options.h).
 
 - **Automatic download-start acceleration (patch 0007).** The default profile starts with two MTProto download sessions per DC, preserves the upstream per-session startup window of 4 × 128 KiB, and can adapt upward to eight sessions. Upstream timeout and success logic can remove sessions after repeated slow requests and later add them back. Upload concurrency is unchanged. This can help a high-latency link with spare bandwidth, but does not guarantee a higher rate.
   - [TDesktop download manager at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/storage/download_manager_mtproto.cpp)
@@ -24,7 +28,7 @@ Packet capture counts TCP flows, not Telegram's internal download-session indexe
 
 For a controlled comparison:
 
-1. Use one account, one proxy setting, and a large file not already cached locally. Pause all other downloads.
+1. Use one account, one proxy setting, and the same large file. Pause all other downloads. Before each trial, clear Telegram's media cache in Settings → Advanced → Data & Storage → Manage Local Storage so the test cannot read a cached copy.
 2. Set the policy to 1 and restart. Download the file three times, recording full elapsed time and average throughput.
 3. Repeat with Automatic, 4, and optionally 8. Compare median time/throughput rather than one run; verify the downloaded file opens and that repeated downloads of the same content produce matching SHA-256 hashes.
 4. For connection evidence, capture only during the transfer and correlate flows to the Telegram process. A Debug build's Download (dcId,index) logs identify the DC and session index; indexes 0–3 confirm that all four pool slots handled requests for that DC; overlapping active requests or flows are needed to confirm they were concurrent at the same moment. In Automatic mode the pool can grow gradually, so observe the log over the whole transfer.
@@ -32,6 +36,8 @@ For a controlled comparison:
 
 A faster result is evidence for the tested route and file, not a universal speed guarantee. Telegram's file documentation also describes server-provided limits for parallel downloads of multiple files from one DC; this patch adjusts the MTProto session pool and does not increase the number of queued files.
 - [Telegram file download guidance](https://core.telegram.org/api/files)
+
+Your manual test with the policy set to 8 observed eight download sessions, confirming that the configured pool size is applied. This verifies session creation, not a universal speed increase; compare transfer times separately.
 
 ## Forwarding more than 100 messages
 
@@ -69,12 +75,11 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 ### Candidate next work
 
 1. **Bulk forward above 100.** Add a dedicated action that chunks requests and reports progress; do not raise the global selection cap.
-2. **DC reachability test.** A manual, bounded diagnostic could report which DCs are reachable through the current proxy. The current patch only labels the account's main DC.
-3. **Memory profile first.** Measure idle, scrolling, animated media, and concurrent downloads before changing media thresholds or caches.
+2. **Memory profile first.** Measure idle, scrolling, animated media, and concurrent downloads before changing media thresholds or caches.
 
 ## Validation
 
-- Patch 0008 passes git apply --check against the pinned v7.3.1 source after patches 0006 and 0007.
-- The repository semantic patch parser matched all ten hunks uniquely and strictly; git diff --check passed.
-- The previous UX build with patches 0006–0007 passed the public Windows Release workflow [run #6](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38406495730), and the executable launched successfully.
-- Patch 0008 still needs the public Windows Release workflow build before it can be called verified.
+- Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
+- The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.
+- The public Windows Release build for patches 0001–0008 passed [run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440). You confirmed the executable opens and manually verified eight sessions when configured to 8.
+- Patch 0009 still needs the public Windows Release build before it can be called build-verified.

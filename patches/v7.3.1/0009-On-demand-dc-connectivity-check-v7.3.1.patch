@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Add on-demand data center connectivity check
+
+---
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -17,2 +17,4 @@
+ #include "base/screen_reader_state.h"
++#include "base/timer.h"
++#include "base/weak_ptr.h"
+ #include "boxes/about_box.h"
+@@ -37,3 +39,6 @@
+ #include "main/main_session_settings.h"
++#include "mtproto/connection_abstract.h"
+ #include "mtproto/facade.h"
++#include "mtproto/mtproto_dc_options.h"
++#include "mtproto/mtproto_proxy_data.h"
+ #include "mtproto/mtp_instance.h"
+@@ -73,3 +78,4 @@
+ #include "styles/style_settings.h"
++#include "styles/style_widgets.h"
+ 
+ #ifdef Q_OS_MAC
+@@ -85,3 +91,6 @@
+ #include <ksandbox.h>
++#include <array>
++#include <optional>
++#include <utility>
+ 
+ namespace Settings {
+@@ -97,3 +106,165 @@
+ #endif // Q_OS_MAC && !OS_MAC_STORE
+ 
++constexpr auto kTpatchDcCount = 5;
++constexpr auto kTpatchDcCheckTimeout = crl::time(10000);
++
++using TpatchDcConnection = MTP::details::AbstractConnection;
++using TpatchDcVariants = MTP::DcOptions::Variants;
++using TpatchDcReport = Fn<void(int, std::optional<int>)>;
++
++class TpatchDcConnectivityProbe final : public base::has_weak_ptr {
++public:
++	TpatchDcConnectivityProbe(
++		not_null<MTP::Instance*> mtp,
++		const MTP::ProxyData &proxy,
++		TpatchDcReport report);
++
++private:
++	void start(int index);
++	void finish(int index, std::optional<int> ping);
++
++	const not_null<MTP::Instance*> _mtp;
++	const MTP::ProxyData _proxy;
++	const TpatchDcReport _report;
++	std::array<MTP::details::ConnectionPointer, kTpatchDcCount> _connections;
++	std::array<bool, kTpatchDcCount> _finished = {};
++	base::Timer _timeout;
++};
++
++TpatchDcConnectivityProbe::TpatchDcConnectivityProbe(
++		not_null<MTP::Instance*> mtp,
++		const MTP::ProxyData &proxy,
++		TpatchDcReport report)
++: _mtp(mtp)
++, _proxy(proxy)
++, _report(std::move(report))
++, _timeout([this] {
++	for (auto index = 0; index != kTpatchDcCount; ++index) {
++		finish(index, std::nullopt);
++	}
++}) {
++	_timeout.callOnce(kTpatchDcCheckTimeout);
++	for (auto index = 0; index != kTpatchDcCount; ++index) {
++		start(index);
++	}
++}
++
++void TpatchDcConnectivityProbe::start(int index) {
++	const auto dcId = MTP::DcId(index + 1);
++	const auto protocol = (_proxy.type == MTP::ProxyData::Type::Http)
++		? TpatchDcVariants::Http
++		: TpatchDcVariants::Tcp;
++	const auto connect = [&](const QString &host, int port, const bytes::vector &secret) {
++		auto &connection = _connections[index];
++		connection = TpatchDcConnection::Create(
++			_mtp,
++			protocol,
++			QThread::currentThread(),
++			secret,
++			_proxy);
++		const auto raw = connection.get();
++		const auto weak = base::make_weak(this);
++		raw->connect(raw, &TpatchDcConnection::connected, [=] {
++			if (const auto strong = weak.get()) {
++				strong->finish(index, int(raw->pingTime()));
++			}
++		});
++		const auto failed = [=] {
++			if (const auto strong = weak.get()) {
++				strong->finish(index, std::nullopt);
++			}
++		};
++		raw->connect(raw, &TpatchDcConnection::disconnected, failed);
++		raw->connect(raw, &TpatchDcConnection::error, failed);
++		raw->connectToServer(host, port, secret, dcId, false);
++	};
++	if (_proxy.type == MTP::ProxyData::Type::Mtproto) {
++		connect(_proxy.host, _proxy.port, _proxy.secretFromMtprotoPassword());
++		return;
++	}
++	const auto options = _mtp->dcOptions().lookup(
++		dcId,
++		MTP::DcType::Regular,
++		true);
++	const auto &list = options.data[TpatchDcVariants::IPv4][protocol];
++	if (list.empty()) {
++		finish(index, std::nullopt);
++		return;
++	}
++	const auto &endpoint = list.front();
++	connect(
++		QString::fromStdString(endpoint.ip),
++		endpoint.port,
++		endpoint.secret);
++}
++
++void TpatchDcConnectivityProbe::finish(
++		int index,
++		std::optional<int> ping) {
++	if (_finished[index]) {
++		return;
++	}
++	_finished[index] = true;
++	_connections[index] = nullptr;
++	_report(index, ping);
++}
++
++[[nodiscard]] MTP::ProxyData TpatchDcProbeProxy() {
++	const auto &settings = Core::App().settings().proxy();
++	const auto selected = settings.selected();
++	return (settings.isEnabled()
++		&& selected
++		&& selected.type != MTP::ProxyData::Type::Web)
++		? selected
++		: MTP::ProxyData();
++}
++
++void TpatchDcConnectivityBox(
++		not_null<Ui::GenericBox*> box,
++		not_null<MTP::Instance*> mtp) {
++	struct State {
++		std::array<rpl::variable<QString>, kTpatchDcCount> statuses;
++		std::unique_ptr<TpatchDcConnectivityProbe> probe;
++	};
++	const auto state = box->lifetime().make_state<State>();
++	box->setTitle(tr::lng_tpatch_dc_status_title());
++	box->addRow(object_ptr<Ui::FlatLabel>(
++		box,
++		tr::lng_tpatch_dc_status_about(),
++		st::boxDividerLabel));
++	const auto main = mtp->mainDcId();
++	for (auto index = 0; index != kTpatchDcCount; ++index) {
++		auto name = u"DC%1"_q.arg(index + 1);
++		if (main == index + 1) {
++			name += u" · "_q + tr::lng_tpatch_dc_status_current(tr::now);
++		}
++		box->addRow(object_ptr<Ui::FlatLabel>(
++			box,
++			state->statuses[index].value() | rpl::map([=](const QString &status) {
++				return name + u"\n"_q + status;
++			}),
++			st::boxLabel));
++	}
++	const auto proxy = TpatchDcProbeProxy();
++	const auto check = [=] {
++		for (auto &status : state->statuses) {
++			status = tr::lng_proxy_checking(tr::now);
++		}
++		state->probe = std::make_unique<TpatchDcConnectivityProbe>(
++			mtp,
++			proxy,
++			crl::guard(box, [=](int index, std::optional<int> ping) {
++				state->statuses[index] = ping
++					? tr::lng_tpatch_dc_status_connected(
++						tr::now,
++						lt_ping,
++						QString::number(*ping))
++					: tr::lng_tpatch_dc_status_failed(tr::now);
++			}));
++	};
++	check();
++	box->addButton(tr::lng_tpatch_dc_status_retry(), check);
++	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
++}
++
+ void BuildDataStorageSection(SectionBuilder &builder) {
+@@ -171,13 +342,26 @@
+ 	builder.addButton({
+ 		.id = u"advanced/storage"_q,
+ 		.title = tr::lng_settings_manage_local_storage(),
+ 		.icon = { &st::menuIconStorage },
+ 		.onClick = [=] {
+ 			controller->showSettings(LocalStorageId());
+ 		},
+ 		.keywords = { u"storage"_q, u"cache"_q, u"local"_q },
+ 	});
+ 
++	builder.addButton({
++		.id = u"advanced/dc_status"_q,
++		.title = tr::lng_tpatch_dc_status(),
++		.icon = { &st::menuIconNetwork },
++		.onClick = [=] {
++			controller->show(Box(TpatchDcConnectivityBox, &account->mtp()));
++		},
++		.keywords = {
++			u"connection"_q, u"network"_q, u"data center"_q, u"dc"_q,
++			u"ping"_q, u"latency"_q, u"diagnostic"_q,
++		},
++	});
++
+ 	builder.addButton({
+ 		.id = u"advanced/downloads"_q,
+ 		.title = tr::lng_downloads_section(),
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -5716,1 +5716,8 @@
+ "lng_downloads_section" = "Downloads";
++"lng_tpatch_dc_status" = "Test data center connections";
++"lng_tpatch_dc_status_title" = "Data center connectivity";
++"lng_tpatch_dc_status_about" = "Tests DC1–DC5 via your enabled Telegram proxy, except Web proxies; otherwise it connects directly. The test ends after 10 seconds and does not change normal routing.";
++"lng_tpatch_dc_status_current" = "current account";
++"lng_tpatch_dc_status_connected" = "Handshake RTT: {ping} ms";
++"lng_tpatch_dc_status_failed" = "Could not connect";
++"lng_tpatch_dc_status_retry" = "Test again";

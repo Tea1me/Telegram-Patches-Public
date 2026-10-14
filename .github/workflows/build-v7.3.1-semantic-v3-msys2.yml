@@ -124,8 +124,8 @@ jobs:
               | sort
           )
 
-          if [ "${#patches[@]}" -ne 8 ]; then
-            echo "Expected 8 patch files, found ${#patches[@]}."
+          if [ "${#patches[@]}" -ne 9 ]; then
+            echo "Expected 9 patch files, found ${#patches[@]}."
             exit 1
           fi
 
@@ -248,7 +248,7 @@ jobs:
       # ------------------------------------------------------------
       # Strict patch gate:
       #
-      # - exactly seven patches must exist
+      # - exactly nine patches must exist
       # - every patch must pass git apply --check
       # - apply in numeric filename order
       # - if any one fails, compilation never starts
@@ -376,8 +376,8 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 8 ]; then
-            echo "Expected 8 generated patches, got $count."
+          if [ "$count" -ne 9 ]; then
+            echo "Expected 9 generated patches, got $count."
             exit 1
           fi
 
@@ -1609,7 +1609,7 @@ jobs:
           - **SHA256:** `$env:PACKAGE_SHA256`
           - **Auto-update:** disabled
           - **Crash reports:** disabled
-          - **Patches:** 8
+          - **Patches:** 9
           "@ |
             Out-File `
               -FilePath $env:GITHUB_STEP_SUMMARY `

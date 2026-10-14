@@ -1,0 +1,195 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Add configurable download sessions per DC
+
+---
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+index 309eca1ad7f9bbf7c014bb8ab797334d6f1c2239..1c5dd3da2062d87b7b1ca8195cbb9da0b0639d6e 100644
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -5714,6 +5714,8 @@
+ "lng_translate_cocoon_done" = "Understood";
+ 
+ "lng_downloads_section" = "Downloads";
++"lng_tpatch_download_sessions_per_dc" = "Download sessions per DC";
++"lng_tpatch_download_sessions_auto" = "Automatic (2–8)";
+ "lng_downloads_view_in_chat" = "View in chat";
+ "lng_downloads_view_in_section" = "View in downloads";
+ "lng_downloads_delete_sure_one" = "Do you want to delete this file?";
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+index 7bcc0d8a23cf9f0f70c05578f687d6d86b2b0d9f..06ec0a3cf043f4ca5bc30ea8275cabcd554e3ad1 100644
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "settings/settings_experimental.h"
+ #include "settings/settings_power_saving.h"
+ #include "settings/sections/settings_privacy_security.h"
++#include "storage/download_manager_mtproto.h"
+ #include "storage/localstorage.h"
+ #include "storage/storage_domain.h"
+ #include "tray.h"
+@@ -172,6 +173,73 @@ void BuildDataStorageSection(SectionBuilder &builder) {
+ 			: rpl::single(true) | rpl::type_erased,
+ 	});
+ 
++	const auto downloadSessionLabel = [](int count) {
++		return count == Storage::kAutomaticDownloadSessionsPerDc
++			? tr::lng_tpatch_download_sessions_auto(tr::now)
++			: QString::number(count);
++	};
++	const auto initialDownloadSessions = Storage::DownloadSessionsPerDc();
++	const auto downloadSessionsLabel = container
++		? container->lifetime().make_state<rpl::variable<QString>>(
++			downloadSessionLabel(initialDownloadSessions))
++		: nullptr;
++	const auto downloadSessionsLabelValue = downloadSessionsLabel
++		? (downloadSessionsLabel->value() | rpl::type_erased)
++		: (rpl::single(downloadSessionLabel(initialDownloadSessions))
++			| rpl::type_erased);
++
++	builder.addButton({
++		.id = u"advanced/download_sessions"_q,
++		.title = tr::lng_tpatch_download_sessions_per_dc(),
++		.icon = { &st::menuIconDownload },
++		.label = downloadSessionsLabelValue,
++		.onClick = [=] {
++			const auto current = Storage::DownloadSessionsPerDc();
++			auto options = std::vector<QString>{
++				tr::lng_tpatch_download_sessions_auto(tr::now),
++			};
++			for (auto count = Storage::kMinDownloadSessionsPerDc;
++					count <= Storage::kMaxDownloadSessionsPerDc;
++					++count) {
++				options.push_back(QString::number(count));
++			}
++			controller->show(Box([=, options = std::move(options)](
++					not_null<Ui::GenericBox*> box) {
++				SingleChoiceBox(box, {
++					.title = tr::lng_tpatch_download_sessions_per_dc(),
++					.options = options,
++					.initialSelection = (current == Storage::kAutomaticDownloadSessionsPerDc)
++						? 0
++						: current,
++					.callback = [=](int index) {
++						const auto selected = (index == 0)
++							? Storage::kAutomaticDownloadSessionsPerDc
++							: index;
++						if (selected == current) {
++							return;
++						}
++						Core::App().settings().writePref<QByteArray>(
++							Storage::kDownloadSessionsPerDcPreferenceKey,
++							QByteArray::number(selected));
++						Core::App().saveSettingsDelayed();
++						if (downloadSessionsLabel) {
++							*downloadSessionsLabel = downloadSessionLabel(selected);
++						}
++						controller->show(Ui::MakeConfirmBox({
++							.text = tr::lng_settings_need_restart(),
++							.confirmed = [=] { Core::Restart(); },
++							.confirmText = tr::lng_settings_restart_now(),
++						}));
++					},
++				});
++			}));
++		},
++		.keywords = {
++			u"download"_q, u"parallel"_q, u"sessions"_q, u"network"_q,
++			u"threads"_q, u"concurrency"_q,
++		},
++	});
++
+ 	builder.addButton({
+ 		.id = u"advanced/storage"_q,
+ 		.title = tr::lng_settings_manage_local_storage(),
+diff --git a/Telegram/SourceFiles/storage/download_manager_mtproto.cpp b/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
+index 2e180de21606d02ef60464a46e9a23d064e2cc2b..a696d643af20d6a49ba5ed02b86881da6220188b 100644
+--- a/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
++++ b/Telegram/SourceFiles/storage/download_manager_mtproto.cpp
+@@ -15,6 +15,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "data/data_document.h"
+ #include "apiwrap.h"
+ #include "base/openssl_help.h"
++#include "core/application.h"
++#include "core/core_settings.h"
++
++#include <algorithm>
+ 
+ namespace Storage {
+ namespace {
+@@ -22,9 +26,9 @@ namespace {
+ constexpr auto kKillSessionTimeout = 15 * crl::time(1000);
+ constexpr auto kStartWaitedInSession = 4 * kDownloadPartSize;
+ constexpr auto kMaxWaitedInSession = 16 * kDownloadPartSize;
+-constexpr auto kMinSessionsCount = 1;
++constexpr auto kMinSessionsCount = kMinDownloadSessionsPerDc;
+ constexpr auto kStartSessionsCount = 2;
+-constexpr auto kMaxSessionsCount = 8;
++constexpr auto kMaxSessionsCount = kMaxDownloadSessionsPerDc;
+ constexpr auto kMaxTrackedSessionRemoves = 64;
+ constexpr auto kRetryAddSessionTimeout = 8 * crl::time(1000);
+ constexpr auto kRetryAddSessionSuccesses = 3;
+@@ -41,6 +45,16 @@ constexpr auto kBadRequestDurationThreshold = 8 * crl::time(1000);
+ 
+ } // namespace
+ 
++int DownloadSessionsPerDc() {
++	const auto stored = Core::App().settings().readPref<QByteArray>(
++		kDownloadSessionsPerDcPreferenceKey,
++		QByteArray::number(kAutomaticDownloadSessionsPerDc));
++	return std::clamp(
++		stored.toInt(),
++		kAutomaticDownloadSessionsPerDc,
++		kMaxDownloadSessionsPerDc);
++}
++
+ void DownloadManagerMtproto::Queue::enqueue(
+ 		not_null<Task*> task,
+ 		int priority) {
+@@ -114,8 +128,11 @@ DownloadManagerMtproto::DcSessionBalanceData::DcSessionBalanceData()
+ : maxWaitedAmount(kStartWaitedInSession) {
+ }
+ 
+-DownloadManagerMtproto::DcBalanceData::DcBalanceData()
+-: sessions(kStartSessionsCount) {
++DownloadManagerMtproto::DcBalanceData::DcBalanceData() {
++	const auto configured = DownloadSessionsPerDc();
++	const auto automatic = (configured == kAutomaticDownloadSessionsPerDc);
++	maxSessions = automatic ? kMaxSessionsCount : configured;
++	sessions.resize(automatic ? kStartSessionsCount : configured);
+ }
+ 
+ DownloadManagerMtproto::DownloadManagerMtproto(not_null<ApiWrap*> api)
+@@ -284,7 +301,7 @@ void DownloadManagerMtproto::requestSucceeded(
+ 	if (dc.timeouts > 0) {
+ 		--dc.timeouts;
+ 		return;
+-	} else if (dc.sessions.size() == kMaxSessionsCount) {
++	} else if (dc.sessions.size() >= dc.maxSessions) {
+ 		return;
+ 	}
+ 	const auto now = crl::now();
+diff --git a/Telegram/SourceFiles/storage/download_manager_mtproto.h b/Telegram/SourceFiles/storage/download_manager_mtproto.h
+index d81e37a2e7249dfdcd9f2e303bee85f10e032704..ed56bf7b141b7a6cc7e13133582cc6923412c2df 100644
+--- a/Telegram/SourceFiles/storage/download_manager_mtproto.h
++++ b/Telegram/SourceFiles/storage/download_manager_mtproto.h
+@@ -24,6 +24,12 @@ namespace Storage {
+ // and then we get a CDN-redirect where we support only
+ // fixed part size download for hash checking.
+ constexpr auto kDownloadPartSize = 128 * 1024;
++inline constexpr auto kAutomaticDownloadSessionsPerDc = 0;
++inline constexpr auto kMinDownloadSessionsPerDc = 1;
++inline constexpr auto kMaxDownloadSessionsPerDc = 8;
++inline constexpr auto kDownloadSessionsPerDcPreferenceKey
++	= "telegram-patches/download-sessions-per-dc";
++[[nodiscard]] int DownloadSessionsPerDc();
+ 
+ class DownloadMtprotoTask;
+ 
+@@ -93,6 +99,7 @@ private:
+ 		DcBalanceData();
+ 
+ 		std::vector<DcSessionBalanceData> sessions;
++		int maxSessions = 0;
+ 		crl::time lastSessionRemove = 0;
+ 		int sessionRemoveIndex = 0;
+ 		int sessionRemoveTimes = 0;

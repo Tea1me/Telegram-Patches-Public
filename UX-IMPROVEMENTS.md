@@ -1,6 +1,6 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries nine patches total: a main-DC label, conservative download acceleration, an adjustable per-DC download-session policy, and an on-demand DC connectivity check.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries ten patches total, including a main-DC label, conservative download acceleration, an adjustable per-DC download-session policy, an on-demand DC connectivity check, and an optional message-ID tooltip.
 
 ## Implemented
 
@@ -11,6 +11,9 @@ This branch keeps the five patches from the successful v7.3.1 baseline and carri
 - **Check data-center connectivity on demand (patch 0009).** Settings → Advanced → Data & Storage opens a one-shot test for DC1–DC5, reports connection latency or failure, and marks the account's current main DC. It uses the enabled Telegram proxy except Web proxies, then falls back to a direct connection. The total deadline is 10 seconds; closing the dialog releases active probes. It does not poll in the background, change routing, or identify the DC that serves an individual media file.
   - Adapted from [SereinGram's DC status probe at pinned commit](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/dc_status.cpp).
   - TDesktop connection APIs: [connection_abstract.h at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/connection_abstract.h), [mtproto_dc_options.h at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/mtproto_dc_options.h).
+
+- **Show server message IDs in the timestamp tooltip (patch 0010).** Settings → Advanced → Data & Storage includes an opt-in checkbox, off by default. Hover a message timestamp to see its positive server message ID; channels that already show view/forward counts retain those details and add the ID on a separate tooltip line. The preference applies immediately and does not widen message bubbles.
+  - Inspired by 64Gram's [feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md) and [timestamp implementation](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp). This branch uses Telegram Desktop's existing custom-tooltip path and a separate default-off preference.
 
 - **Automatic download-start acceleration (patch 0007).** The default profile starts with two MTProto download sessions per DC, preserves the upstream per-session startup window of 4 × 128 KiB, and can adapt upward to eight sessions. Upstream timeout and success logic can remove sessions after repeated slow requests and later add them back. Upload concurrency is unchanged. This can help a high-latency link with spare bandwidth, but does not guarantee a higher rate.
   - [TDesktop download manager at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/storage/download_manager_mtproto.cpp)
@@ -81,5 +84,7 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.
+- Patch 0010 was applied after patches 0008 and 0009 in a source fixture. All six hunks matched exactly one source span; its C++ hunks also pass `git apply --check` against that post-0009 fixture.
 - The public Windows Release build for patches 0001–0008 passed [run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440). You confirmed the executable opens and manually verified eight sessions when configured to 8.
-- Patch 0009 still needs the public Windows Release build before it can be called build-verified.
+- Patches 0001–0009 passed the public Windows Release build, portable packaging, and artifact upload in [run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048).
+- Patch 0010 has local semantic-match validation; its public build and in-app checkbox/tooltip behavior still need verification.

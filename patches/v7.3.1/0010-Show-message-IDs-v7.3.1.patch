@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Show message IDs in timestamp tooltip
+
+---
+diff --git a/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp b/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp
+--- a/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp
+@@ -14,8 +14,10 @@
+ #include "ui/text/format_values.h"
+ #include "ui/text/text_options.h"
+ #include "ui/text/text_utilities.h"
+ #include "ui/painter.h"
++#include "core/application.h"
++#include "core/core_settings.h"
+ #include "core/ui_integration.h"
+ #include "lang/lang_keys.h"
+ #include "history/history_item_components.h"
+ #include "history/history_item_helpers.h"
+@@ -37,8 +39,11 @@
+ #include "styles/style_credits.h"
+ 
+ namespace HistoryView {
+ namespace {
++
++constexpr auto kTpatchShowMessageIdsPreferenceKey
++	= "telegram-patches/show-message-ids";
+ 
+ [[nodiscard]] QString SchedulePeriodText(TimeId period) {
+ 	struct Entry {
+ 		TimeId period = 0;
+@@ -210,8 +215,21 @@
+ 		st::msgDateFont->height
+ 	).contains(position);
+ 	if (inTime) {
+ 		result.cursor = CursorState::Date;
++		const auto messageId = item->fullId().msg;
++		if (Core::App().settings().readPref<bool>(
++				kTpatchShowMessageIdsPreferenceKey,
++				false)
++			&& messageId.bare > 0) {
++			const auto idText = tr::lng_tpatch_message_id(tr::now)
++				+ u": "_q
++				+ QString::number(messageId.bare);
++			result.customTooltipText = result.customTooltipText.isEmpty()
++				? idText
++				: result.customTooltipText + '\n' + idText;
++			result.customTooltip = true;
++		}
+ 	}
+ 	return result;
+ }
+ 
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -86,8 +86,11 @@
+ 
+ namespace Settings {
+ namespace {
+ 
++constexpr auto kTpatchShowMessageIdsPreferenceKey
++	= "telegram-patches/show-message-ids";
++
+ using namespace Builder;
+ 
+ #if defined Q_OS_MAC && !defined OS_MAC_STORE
+ [[nodiscard]] const QImage &IconMacRound() {
+@@ -209,8 +212,30 @@
+ 			if (showDownloadPath) {
+ 				*showDownloadPath = !checked;
+ 			}
+ 		}, askDownloadPath->lifetime());
++	}
++
++	const auto showMessageIds = builder.addCheckbox({
++		.id = u"advanced/show_message_ids"_q,
++		.title = tr::lng_tpatch_show_message_ids(),
++		.checked = Core::App().settings().readPref<bool>(
++			kTpatchShowMessageIdsPreferenceKey,
++			false),
++		.keywords = { u"message"_q, u"id"_q, u"debug"_q },
++	});
++	if (showMessageIds) {
++		showMessageIds->checkedChanges(
++		) | rpl::filter([=](bool checked) {
++			return (checked != Core::App().settings().readPref<bool>(
++				kTpatchShowMessageIdsPreferenceKey,
++				false));
++		}) | rpl::on_next([=](bool checked) {
++			Core::App().settings().writePref<bool>(
++				kTpatchShowMessageIdsPreferenceKey,
++				checked);
++			Core::App().saveSettingsDelayed();
++		}, showMessageIds->lifetime());
+ 	}
+ 
+ 	builder.addSkip(st::settingsCheckboxesSkip);
+ }
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -5723,1 +5723,3 @@
+ "lng_tpatch_dc_status_retry" = "Test again";
++"lng_tpatch_show_message_ids" = "Show message IDs in timestamp tooltip";
++"lng_tpatch_message_id" = "Message ID";

@@ -1,6 +1,6 @@
 # Telegram Desktop v7.3.1 补丁版构建
 
-本分支将本仓库的九项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
+本分支将本仓库的十项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
 
 - 上游标签：[v7.3.1](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.3.1)
 - 固定源码 commit：[6fed91ffab9861771a75f29df65031b3c80b6941](https://github.com/telegramdesktop/tdesktop/commit/6fed91ffab9861771a75f29df65031b3c80b6941)
@@ -20,10 +20,15 @@
 | 0007 | 自动下载并发以每 DC 两个 MTProto 会话起步，可按上游逻辑逐步扩到 8 个；保留超时回退，不改上传策略。 |
 | 0008 | 在“设置 → 高级 → 数据与存储”增加每 DC 下载会话数设置：自动（2 起步、自适应到 8）或手动 1–8。手动值既是起步数也是上限；超时恢复逻辑仍可暂时降到 1。 |
 | 0009 | 增加按需 DC1–DC5 连通性检查，显示握手延迟或失败并标记当前账号主 DC；10 秒后收尾，不改变连接路由。 |
+| 0010 | 默认关闭；启用后将服务器消息 ID 显示在时间戳悬停提示中，仅对正数消息 ID 生效，不改变消息布局。 |
 
 ### 按需检查 DC 连通性
 
 入口位于“设置 → 高级 → 数据与存储 → Test data center connections”。打开后并行检查 DC1–DC5，显示连接延迟或失败，并标记当前账号的主 DC。每次检查最多运行 10 秒，使用启用的 Telegram 代理（Web 代理除外），否则直连；关闭对话框会结束检查。这只是网络诊断，不代表某个文件的实际 DC，也不会改变正常路由。
+
+### 查看消息 ID
+
+在“设置 → 高级 → 数据与存储”启用 **Show message IDs in timestamp tooltip**（默认关闭）。悬停消息时间戳即可查看正数服务器消息 ID；频道消息原有的浏览量或转发量提示会保留并另起一行显示 ID。该设置即时生效，不需要重启。
 
 这些改动只修改客户端行为，不能变更服务器端的权限、订阅状态或限制。邀请链接、账号数、受保护内容等仍可能受服务器规则约束。
 
@@ -58,7 +63,7 @@ push 在 v7.3.1 与 v7.3.1-ux 分支的补丁、工具或该 workflow 文件变�
 
 ## 适配与验证状态
 
-v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38262024061) 全量构建成功。加入 0006 和 0007 后，[Release run #6](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38406495730) 通过 Windows Release 构建；加入 0008 后，[Release run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440) 也成功，你已确认 exe 可启动并实测 8 个下载会话生效。0009 已在本地对照固定的 v7.3.1 源码通过补丁唯一匹配与差异格式检查；加入它后的 Windows Release Action 结果待验证。
+v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38262024061) 全量构建成功。加入 0006 和 0007 后，[Release run #6](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38406495730) 通过 Windows Release 构建；加入 0008 后，[Release run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440) 也成功，你已确认 exe 可启动并实测 8 个下载会话生效。0009 加入后的 Windows Release 构建、portable 打包和产物上传已由 [Release run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048) 全部通过。0010 已通过本地补丁匹配与差异检查；加入它后的 Windows Release 构建待验证。
 
 脚本按 v7.3.1 的 prepare.py 适配：上游已使用 MSYS2 UCRT64 软件包名称，因此没有照搬 v7.2.10 的 diffutils/NASM 改写；Qt ICU、Windows SDK ICU、VS2026 Breakpad 工具集和 Qt 单配置步骤则保留并加了锚点检查。转发上限与内存调研见 [UX-IMPROVEMENTS.md](UX-IMPROVEMENTS.md)。
 
@@ -66,4 +71,4 @@ v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github
 
 每个 vX.Y.Z 分支对应一个上游版本，固定其 tag/commit、补丁目录、构建 workflow 和 README。这样可以隔离源码上下文与构建工具链变化；补丁不可只改版本号后直接复用。随着支持版本增加，可把重复的构建逻辑抽成共享脚本，但每个版本仍应保留独立的补丁集和上游 commit 锁定。
 
-仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的九个固定补丁不同；它不能替代本分支的适配和验证。
+仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的十个固定补丁不同；它不能替代本分支的适配和验证。

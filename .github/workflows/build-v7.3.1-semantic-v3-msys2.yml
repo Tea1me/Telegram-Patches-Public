@@ -125,7 +125,7 @@ jobs:
           )
 
           if [ "${#patches[@]}" -ne 9 ]; then
-            echo "Expected 9 patch files, found ${#patches[@]}."
+            echo "Expected 10 patch files, found ${#patches[@]}."
             exit 1
           fi
 
@@ -248,7 +248,7 @@ jobs:
       # ------------------------------------------------------------
       # Strict patch gate:
       #
-      # - exactly nine patches must exist
+      # - exactly ten patches must exist
       # - every patch must pass git apply --check
       # - apply in numeric filename order
       # - if any one fails, compilation never starts
@@ -377,7 +377,7 @@ jobs:
           )"
 
           if [ "$count" -ne 9 ]; then
-            echo "Expected 9 generated patches, got $count."
+            echo "Expected 10 generated patches, got $count."
             exit 1
           fi
 

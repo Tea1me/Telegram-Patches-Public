@@ -124,7 +124,7 @@ jobs:
               | sort
           )
 
-          if [ "${#patches[@]}" -ne 9 ]; then
+          if [ "${#patches[@]}" -ne 10 ]; then
             echo "Expected 10 patch files, found ${#patches[@]}."
             exit 1
           fi
@@ -376,7 +376,7 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 9 ]; then
+          if [ "$count" -ne 10 ]; then
             echo "Expected 10 generated patches, got $count."
             exit 1
           fi
@@ -1609,7 +1609,7 @@ jobs:
           - **SHA256:** `$env:PACKAGE_SHA256`
           - **Auto-update:** disabled
           - **Crash reports:** disabled
-          - **Patches:** 9
+          - **Patches:** 10
           "@ |
             Out-File `
               -FilePath $env:GITHUB_STEP_SUMMARY `

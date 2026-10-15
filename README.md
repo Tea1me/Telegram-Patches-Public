@@ -63,7 +63,7 @@ push 在 v7.3.1 与 v7.3.1-ux 分支的补丁、工具或该 workflow 文件变�
 
 ## 适配与验证状态
 
-v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38262024061) 全量构建成功。加入 0006 和 0007 后，[Release run #6](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38406495730) 通过 Windows Release 构建；加入 0008 后，[Release run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440) 也成功，你已确认 exe 可启动并实测 8 个下载会话生效。0009 加入后的 Windows Release 构建、portable 打包和产物上传已由 [Release run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048) 全部通过。0010 已通过本地补丁匹配与差异检查；加入它后的 Windows Release 构建待验证。
+v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38262024061) 全量构建成功。加入 0006 和 0007 后，[Release run #6](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38406495730) 通过 Windows Release 构建；加入 0008 后，[Release run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440) 也成功，你已确认 exe 可启动并实测 8 个下载会话生效。0009 加入后的 Windows Release 构建、portable 打包和产物上传已由 [Release run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048) 全部通过。0010 已通过本地补丁匹配与差异检查；加入它后的 [Release run #10](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38724066310) 已通过 Windows x64 / Qt6 / Release 全量编译、portable 包校验和产物上传。portable artifact `Telegram-Patched-v7.3.1-Win64-Release`（约 85 MB，保留 14 天）可从该 run 的 Artifacts 下载。
 
 脚本按 v7.3.1 的 prepare.py 适配：上游已使用 MSYS2 UCRT64 软件包名称，因此没有照搬 v7.2.10 的 diffutils/NASM 改写；Qt ICU、Windows SDK ICU、VS2026 Breakpad 工具集和 Qt 单配置步骤则保留并加了锚点检查。转发上限与内存调研见 [UX-IMPROVEMENTS.md](UX-IMPROVEMENTS.md)。
 

@@ -62,7 +62,7 @@
 
 工作流文件：[build-v7.3.1-semantic-v3-msys2.yml](.github/workflows/build-v7.3.1-semantic-v3-msys2.yml)。
 
-1. 工作流在仓库 Settings → Secrets and variables → Actions 读取 `TDESKTOP_API_ID` 和 `TDESKTOP_API_HASH`。两者会在构建时写入客户端；用户不能在运行中的 exe 里改。要使用自己的值，维护者更新这两个 repository secrets 后重新构建。未设置时工作流回退到官方文档标记为测试用途的值。
+1. 工作流在仓库 Settings → Secrets and variables → Actions 读取 `TDESKTOP_API_ID` 和 `TDESKTOP_API_HASH`。两者会在构建时写入客户端；用户不能在运行中的 exe 里改。要使用自己的值，维护者更新这两个 repository secrets 后重新构建。未设置时工作流回退到官方文档标记为测试用途的值。 上游也明确要求在构建时通过 CMake 提供这两个值：[telegram_options.cmake](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)。
 2. 打开 Actions → Build Telegram Desktop Patched Portable，点击 Run workflow。
 3. 选择 Release 或 Debug 并手动启动。
 4. 成功后下载 Telegram-Patched-v7.3.1-Win64-Release 或 Telegram-Patched-v7.3.1-Win64-Debug artifact。便携 ZIP 附带 SHA-256 文件。

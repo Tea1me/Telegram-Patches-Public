@@ -29,6 +29,12 @@ This branch keeps the five patches from the successful v7.3.1 baseline and carri
   - [settings_advanced.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/settings/sections/settings_advanced.cpp)
   - [download_manager_mtproto.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/storage/download_manager_mtproto.cpp)
 
+## API credentials
+
+The build workflow maps the repository's `TDESKTOP_API_ID` and `TDESKTOP_API_HASH` Actions secrets to Telegram Desktop's CMake options. Upstream v7.3.1 defines these as build configuration values, so the executable does not offer a runtime preference for changing them. For a personal build, update the two repository secrets and rebuild; users who download the executable cannot replace these values without rebuilding.
+- [Upstream v7.3.1 CMake options](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)
+- [Telegram Desktop API credential instructions](https://github.com/telegramdesktop/tdesktop/blob/dev/docs/api_credentials.md)
+
 ## Verifying transfer acceleration
 
 Packet capture counts TCP flows, not Telegram's internal download-session indexes. Four visible flows can include the main account connection, sessions for multiple DCs, CDN traffic, proxy connections, or multiple accounts. The count alone cannot confirm that the custom download policy is active.

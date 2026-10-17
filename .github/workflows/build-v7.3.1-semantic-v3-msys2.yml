@@ -7,6 +7,7 @@ on:
     branches:
       - v7.3.1
       - v7.3.1-ux
+      - v7.3.1-bulk-forward
     paths:
       - .github/workflows/build-v7.3.1-semantic-v3-msys2.yml
       - patches/v7.3.1/**
@@ -124,8 +125,8 @@ jobs:
               | sort
           )
 
-          if [ "${#patches[@]}" -ne 10 ]; then
-            echo "Expected 10 patch files, found ${#patches[@]}."
+          if [ "${#patches[@]}" -ne 11 ]; then
+            echo "Expected 11 patch files, found ${#patches[@]}."
             exit 1
           fi
 
@@ -248,7 +249,7 @@ jobs:
       # ------------------------------------------------------------
       # Strict patch gate:
       #
-      # - exactly ten patches must exist
+      # - exactly eleven patches must exist
       # - every patch must pass git apply --check
       # - apply in numeric filename order
       # - if any one fails, compilation never starts
@@ -376,8 +377,8 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 10 ]; then
-            echo "Expected 10 generated patches, got $count."
+          if [ "$count" -ne 11 ]; then
+            echo "Expected 11 generated patches, got $count."
             exit 1
           fi
 
@@ -1609,7 +1610,7 @@ jobs:
           - **SHA256:** `$env:PACKAGE_SHA256`
           - **Auto-update:** disabled
           - **Crash reports:** disabled
-          - **Patches:** 10
+          - **Patches:** 11
           "@ |
             Out-File `
               -FilePath $env:GITHUB_STEP_SUMMARY `

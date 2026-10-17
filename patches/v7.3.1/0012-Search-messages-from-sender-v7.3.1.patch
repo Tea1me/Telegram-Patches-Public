@@ -15,10 +15,9 @@ diff --git a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp b/T
 +		return;
 +	}
 +	const auto peer = item->history()->peer;
-+	const auto from = item->from();
++	const auto from = item->from().get();
 +	if ((!peer->isChat() && !peer->isMegagroup())
-+		|| !from
-+		|| !from->isUser()) {
+++		|| !from->isUser()) {
 +		return;
 +	}
 +	menu->addAction(

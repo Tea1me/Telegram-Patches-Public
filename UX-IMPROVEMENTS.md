@@ -115,11 +115,12 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Custom text replacements.** Kotatogram supports replacements for repeated replies and snippets. This has a direct daily-use benefit; next review the input pipeline, edit UI, and persistence format before porting.
-   - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
-   - [Kotatogram source at the pinned commit](https://github.com/kotatogram/kotatogram-desktop/tree/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles)
-2. **Local folders.** Kotatogram supports folders stored locally; these could organize chat views without changing Telegram's synced folders. The port needs separate storage and clear account/folder behavior.
-   - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
+1. **Custom text replacements.** Kotatogram applies replacements while typing, can undo with Backspace or Ctrl/Cmd+Z, and does not replace pasted text. Its settings manager loads source/target rule pairs into the input replacement engine. This looks useful for repeated replies; a port should preserve undo/paste behavior and make rules easy to edit.
+   - [Kotatogram replacement changelog](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/changelog.txt)
+   - [Kotatogram rule loading](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/kotato/kotato_settings.cpp)
+2. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
+   - [Kotatogram filter model](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/data/data_chat_filters.cpp)
+   - [Kotatogram folder settings](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/settings/sections/settings_folders.cpp)
 3. **AyuGram streamer and privacy controls.** AyuGram lists Streamer mode, message history, anti-recall, and flexible ghost mode. Streamer mode looks worth inspecting for screen-sharing privacy; the history and ghost-mode options need a separate review of local retention and read/online-state effects.
    - [AyuGram Desktop README](https://github.com/AyuGram/AyuGramDesktop)
    - [AyuGram Desktop feature documentation](https://docs.ayugram.one/desktop/)

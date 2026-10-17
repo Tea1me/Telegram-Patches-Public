@@ -1,8 +1,12 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries twelve patches total. It includes the download-session controls, batch forwarding above 100 messages, and sender-filtered group search.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries thirteen patches total. It includes the download-session controls, batch forwarding above 100 messages, sender-filtered group search, and launch-time API credential overrides.
 
 ## Implemented
+
+- **Override API credentials at launch (patch 0013).** Set both `TDESKTOP_API_ID` and `TDESKTOP_API_HASH` in the process environment before launch. A positive decimal ID and a 32-character hexadecimal hash are required; invalid or partial overrides fall back together to the compiled pair. The values are loaded once and are not written to Telegram settings. This supports personal credentials without rebuilding the executable.
+  - Adapted from Kotatogram’s [runtime environment override at a pinned commit](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/core/launcher.cpp).
+  - The override covers phone login, QR login, Passkey initialization, and MTProto connection initialization.
 
 - **Show the main data center in Settings → Advanced → Connection type.** Patch 0006 appends the active account's main DC number and refreshes when that DC changes. Individual media can be served from a different DC, so this is a connection diagnostic, not a per-file route indicator. It does not change routing.
   - [settings_advanced.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/settings/sections/settings_advanced.cpp)
@@ -31,7 +35,22 @@ This branch keeps the five patches from the successful v7.3.1 baseline and carri
 
 ## API credentials
 
-The build workflow maps the repository's `TDESKTOP_API_ID` and `TDESKTOP_API_HASH` Actions secrets to Telegram Desktop's CMake options. Upstream v7.3.1 defines these as build configuration values, so the executable does not offer a runtime preference for changing them. For a personal build, update the two repository secrets and rebuild; users who download the executable cannot replace these values without rebuilding.
+The workflow maps the repository Actions secrets `TDESKTOP_API_ID` and `TDESKTOP_API_HASH` into the executable as build-time defaults. Patch 0013 also reads the runtime pair `TDESKTOP_API_ID` + `TDESKTOP_API_HASH` once, when credentials are first requested. Set both values before launch; a positive decimal ID and a 32-character hexadecimal hash are required. If either value is missing or invalid, the client uses the compiled pair. This lets a downloaded executable use your own credentials without another build.
+
+For Windows, fully exit Telegram, then create a local `.bat` file next to `Telegram.exe`:
+
+```bat
+@echo off
+setlocal
+set "TDESKTOP_API_ID=12345678"
+set "TDESKTOP_API_HASH=replace_with_32_hex_characters"
+start "" "%~dp0Telegram.exe"
+endlocal
+```
+
+Do not commit or share the file containing your personal values. The branch supports environment variables only; it does not put the hash on the command line.
+
+- Adapted from Kotatogram’s environment override in [launcher.cpp at the pinned commit](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/core/launcher.cpp); its documented feature also allows startup parameters, which this branch omits.
 - [Upstream v7.3.1 CMake options](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)
 - [Telegram Desktop API credential instructions](https://github.com/telegramdesktop/tdesktop/blob/dev/docs/api_credentials.md)
 
@@ -90,15 +109,20 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Show the message count before deleting all messages from one sender.** 64Gram documents a sender-wide delete count, and its delete flow queries messages using the sender filter before updating the confirmation UI. Telegram Desktop issue #8642 describes the risk of accidentally deleting a sender's whole chat history with no undo. Before porting, check the exact v7.3.1 moderation path and keep the count tied to the server response rather than estimating from loaded history.
+1. **Show the message count before deleting all messages from one sender.** 64Gram combines a moderator action with an `Api::MessagesSearch` query and displays the result count in the confirmation flow. In v7.3.1, the corresponding moderation hook is not present in `DeleteMessagesBox`, so porting it means adding the action path as well as the count. Telegram Desktop issue #8642 documents accidental sender-wide deletion with no undo; any count must come from the server response, never from locally loaded messages.
    - [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
+   - [64Gram delete confirmation implementation at the pinned commit](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/boxes/delete_messages_box.cpp)
    - [Telegram Desktop issue #8642](https://github.com/telegramdesktop/tdesktop/issues/8642)
-2. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. A safe port needs clear trigger rules, per-user editing, and predictable undo behavior.
-   - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
-   - [Kotatogram release notes](https://github.com/kotatogram/kotatogram-desktop/releases)
-3. **Local folders and memory profiling.** Kotatogram lists local folders; TDesktop already has synchronized chat folders, so a local-only variant would need a clear benefit before taking on separate storage and UI state. Profile memory separately before tuning caches or media preloading.
-
+2. **Local folders.** Kotatogram supports folders stored locally; these could organize chat views without changing Telegram's synced folders. The port would need separate storage and clear account/folder behavior.
+   - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
+3. **Custom text replacements.** Kotatogram supports replacements for repeated replies and snippets. This has a direct daily-use benefit; next review the input pipeline and edit UI before porting.
+   - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
+4. **AyuGram privacy controls.** Ghost mode, message history, and anti-recall are substantial features, but change read/online-state behavior or local message retention. Review per-toggle semantics and cross-device effects before porting.
+   - [AyuGram Desktop README](https://github.com/AyuGram/AyuGramDesktop)
+   - [AyuGram feature documentation](https://docs.ayugram.one/desktop/)
 ## Validation
+
+- Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes. Runtime override behavior still needs a Windows build and launch test.
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.

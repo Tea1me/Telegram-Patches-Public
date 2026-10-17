@@ -1,6 +1,6 @@
 # Telegram Desktop v7.3.1 补丁版构建
 
-本分支将本仓库的十二项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
+本分支将本仓库的十三项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
 
 - 上游标签：[v7.3.1](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.3.1)
 - 固定源码 commit：[6fed91ffab9861771a75f29df65031b3c80b6941](https://github.com/telegramdesktop/tdesktop/commit/6fed91ffab9861771a75f29df65031b3c80b6941)
@@ -22,7 +22,8 @@
 | 0009 | 增加按需 DC1–DC5 连通性检查，显示握手延迟或失败并标记当前账号主 DC；10 秒后收尾，不改变连接路由。 |
 | 0010 | 默认关闭；启用后将服务器消息 ID 显示在时间戳悬停提示中，仅对正数消息 ID 生效，不改变消息布局。 |
 | 0011 | 聊天记录最多可选择 1000 条消息并按服务器 `forwarded_count_max` 分批转发；超过 100 条时隐藏删除操作并在删除入口再次拦截。该补丁不改变服务器单次转发上限。 |
-| 0012 | 在群组和超级群组的单条用户消息菜单中增加 **Search messages**，直接在当前聊天按发送者筛选历史。多选、广播频道及匿名/非用户发送者不显示该入口。 | |
+| 0012 | 在群组和超级群组的单条用户消息菜单中增加 **Search messages**，直接在当前聊天按发送者筛选历史。多选、广播频道及匿名/非用户发送者不显示该入口。 |
+| 0013 | 启动时可通过 `TDESKTOP_API_ID` 与 `TDESKTOP_API_HASH` 环境变量覆盖内置凭据；两者必须同时有效，否则成对使用构建时默认值。 | |
 
 ### 按需检查 DC 连通性
 
@@ -62,12 +63,27 @@
 
 工作流文件：[build-v7.3.1-semantic-v3-msys2.yml](.github/workflows/build-v7.3.1-semantic-v3-msys2.yml)。
 
-1. 工作流在仓库 Settings → Secrets and variables → Actions 读取 `TDESKTOP_API_ID` 和 `TDESKTOP_API_HASH`。两者会在构建时写入客户端；用户不能在运行中的 exe 里改。要使用自己的值，维护者更新这两个 repository secrets 后重新构建。未设置时工作流回退到官方文档标记为测试用途的值。 上游也明确要求在构建时通过 CMake 提供这两个值：[telegram_options.cmake](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)。
+1. 工作流从仓库 Settings → Secrets and variables → Actions 读取 `TDESKTOP_API_ID` 和 `TDESKTOP_API_HASH`，并将其作为客户端的构建默认值。未设置时工作流使用 Telegram 官方文档标记为测试用途的值；它们只适合测试，不适合日常账号登录。上游要求构建时通过 CMake 提供一组值：[telegram_options.cmake](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)。
 2. 打开 Actions → Build Telegram Desktop Patched Portable，点击 Run workflow。
 3. 选择 Release 或 Debug 并手动启动。
 4. 成功后下载 Telegram-Patched-v7.3.1-Win64-Release 或 Telegram-Patched-v7.3.1-Win64-Debug artifact。便携 ZIP 附带 SHA-256 文件。
 
-push 在 v7.3.1、v7.3.1-ux、v7.3.1-bulk-forward 与 v7.3.1-search-from-sender 分支的补丁、工具或该 workflow 文件变化时触发；也可以从 Actions 手动运行 workflow_dispatch。构建依赖 Windows、Visual Studio、Qt 和较长时间的依赖编译；artifact 保留 14 天，源码差异和补丁清单保留 30 天。
+### 用自己的 API_ID/API_HASH 启动
+
+无需为这两个值重新编译。完全退出所有 Telegram 进程后，在 `Telegram.exe` 同目录创建一个本地 `.bat` 文件，填入你从 Telegram 官方页面申请的 API ID 和 API hash：
+
+```bat
+@echo off
+setlocal
+set "TDESKTOP_API_ID=12345678"
+set "TDESKTOP_API_HASH=替换成32位十六进制hash"
+start "" "%~dp0Telegram.exe"
+endlocal
+```
+
+ID 必须是正整数，hash 必须是 32 位十六进制字符；两个变量都有效时才会同时采用。任何一个缺失或格式无效，客户端会改用构建时的默认凭据。客户端在本次进程首次读取凭据后缓存结果，修改变量后需彻底退出并通过该 `.bat` 重启。不要把含有个人凭据的 `.bat` 上传到公开仓库。
+
+push 在 v7.3.1、v7.3.1-ux、v7.3.1-bulk-forward、v7.3.1-search-from-sender 与 v7.3.1-api-credentials 分支的补丁、工具或该 workflow 文件变化时触发；也可以从 Actions 手动运行 workflow_dispatch。构建依赖 Windows、Visual Studio、Qt 和较长时间的依赖编译；artifact 保留 14 天，源码差异和补丁清单保留 30 天。
 
 工作流将上游 x64 便携包固定为 [td-portable-win-x64-7.3.1.zip](https://github.com/telegramdesktop/tdesktop/releases/download/v7.3.1/td-portable-win-x64-7.3.1.zip)，并核对其 SHA-256：e3ec293ecadce43aab947e8ef274456529e634a6841e6b661eca6efe600ffcda。该包用于提取 D3D 编译器 DLL，不是本项目生成的补丁客户端。
 
@@ -81,4 +97,4 @@ v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github
 
 每个 vX.Y.Z 分支对应一个上游版本，固定其 tag/commit、补丁目录、构建 workflow 和 README。这样可以隔离源码上下文与构建工具链变化；补丁不可只改版本号后直接复用。随着支持版本增加，可把重复的构建逻辑抽成共享脚本，但每个版本仍应保留独立的补丁集和上游 commit 锁定。
 
-仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的十二个固定补丁不同；它不能替代本分支的适配和验证。
+仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的十三个固定补丁不同；它不能替代本分支的适配和验证。

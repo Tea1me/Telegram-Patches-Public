@@ -105,6 +105,11 @@ diff --git a/Telegram/SourceFiles/apiwrap.cpp b/Telegram/SourceFiles/apiwrap.cpp
 diff --git a/Telegram/SourceFiles/boxes/share_box.cpp b/Telegram/SourceFiles/boxes/share_box.cpp
 --- a/Telegram/SourceFiles/boxes/share_box.cpp
 +++ b/Telegram/SourceFiles/boxes/share_box.cpp
+@@ -58,3 +58,4 @@
+ #include "data/data_changes.h"
+ #include "main/main_session.h"
++#include "mtproto/mtproto_config.h"
+ #include "core/application.h"
 @@ -1878,6 +1878,9 @@
  		const auto ranges = CollectForwardRanges(items);
  		if (ranges.empty()) {

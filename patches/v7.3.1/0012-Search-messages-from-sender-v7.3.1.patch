@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Add search-from-sender action to group message menu
+
+---
+diff --git a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
+--- a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
+@@ -1401,1 +1401,24 @@
++void AddSearchFromAction(
++		not_null<Ui::PopupMenu*> menu,
++		const ContextMenuRequest &request,
++		not_null<ListWidget*> list) {
++	const auto item = request.item;
++	if (!request.selectedItems.empty() || !item) {
++		return;
++	}
++	const auto peer = item->history()->peer;
++	const auto from = item->from();
++	if ((!peer->isChat() && !peer->isMegagroup())
++		|| !from
++		|| !from->isUser()) {
++		return;
++	}
++	menu->addAction(
++		tr::lng_context_search_from(tr::now),
++		[=] {
++			list->controller()->searchInChat(item->history(), from);
++		},
++		&st::menuIconSearch);
++}
++
+ void AddMessageActions(
+@@ -1405,3 +1428,4 @@
+ 	AddPostLinkAction(menu, request);
+ 	AddForwardAction(menu, request, list);
++	AddSearchFromAction(menu, request, list);
+ 	AddOfferAction(menu, request, list);

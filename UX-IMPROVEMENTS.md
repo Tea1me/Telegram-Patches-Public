@@ -107,19 +107,22 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 - **SereinGram's DC status dialog** makes bounded, on-demand probes to the five DCs and applies a 10-second overall deadline through the currently selected non-Web proxy when enabled. It is a connectivity diagnostic, not proof of the route used by one media file. Continuous probes would add traffic and connections, so any port should remain user-triggered.
   - [SereinGram DC status probe at pinned commit](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/dc_status.cpp)
 
+### Already available upstream
+
+64Gram's feature list includes showing a user's total sent-message count before a moderator deletes that sender's messages. No new patch is needed for this branch: Telegram Desktop v7.3.1 already queries `Api::MessagesSearch` with the sender filter, stores the server's `found.total`, and exposes the count in its moderation confirmation UI.
+- [TDesktop v7.3.1 moderation count query](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/boxes/moderate_messages_box.cpp)
+- [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
+
 ### Candidate next work
 
-1. **Show the message count before deleting all messages from one sender.** 64Gram combines a moderator action with an `Api::MessagesSearch` query and displays the result count in the confirmation flow. In v7.3.1, the corresponding moderation hook is not present in `DeleteMessagesBox`, so porting it means adding the action path as well as the count. Telegram Desktop issue #8642 documents accidental sender-wide deletion with no undo; any count must come from the server response, never from locally loaded messages.
-   - [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
-   - [64Gram delete confirmation implementation at the pinned commit](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/boxes/delete_messages_box.cpp)
-   - [Telegram Desktop issue #8642](https://github.com/telegramdesktop/tdesktop/issues/8642)
-2. **Local folders.** Kotatogram supports folders stored locally; these could organize chat views without changing Telegram's synced folders. The port would need separate storage and clear account/folder behavior.
+1. **Custom text replacements.** Kotatogram supports replacements for repeated replies and snippets. This has a direct daily-use benefit; next review the input pipeline, edit UI, and persistence format before porting.
    - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
-3. **Custom text replacements.** Kotatogram supports replacements for repeated replies and snippets. This has a direct daily-use benefit; next review the input pipeline and edit UI before porting.
+   - [Kotatogram source at the pinned commit](https://github.com/kotatogram/kotatogram-desktop/tree/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles)
+2. **Local folders.** Kotatogram supports folders stored locally; these could organize chat views without changing Telegram's synced folders. The port needs separate storage and clear account/folder behavior.
    - [Kotatogram feature list](https://github.com/kotatogram/kotatogram-desktop)
-4. **AyuGram privacy controls.** Ghost mode, message history, and anti-recall are substantial features, but change read/online-state behavior or local message retention. Review per-toggle semantics and cross-device effects before porting.
+3. **AyuGram streamer and privacy controls.** AyuGram lists Streamer mode, message history, anti-recall, and flexible ghost mode. Streamer mode looks worth inspecting for screen-sharing privacy; the history and ghost-mode options need a separate review of local retention and read/online-state effects.
    - [AyuGram Desktop README](https://github.com/AyuGram/AyuGramDesktop)
-   - [AyuGram feature documentation](https://docs.ayugram.one/desktop/)
+   - [AyuGram Desktop feature documentation](https://docs.ayugram.one/desktop/)
 ## Validation
 
 - Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes. Runtime override behavior still needs a Windows build and launch test.

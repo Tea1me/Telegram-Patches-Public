@@ -1,6 +1,6 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries eleven patches total. Alongside the main-DC label and download changes, it includes batch forwarding for selections above 100 messages.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries twelve patches total. It includes the download-session controls, batch forwarding above 100 messages, and sender-filtered group search.
 
 ## Implemented
 
@@ -14,6 +14,10 @@ This branch keeps the five patches from the successful v7.3.1 baseline and carri
 
 - **Show server message IDs in the timestamp tooltip (patch 0010).** Settings → Advanced → Data & Storage includes an opt-in checkbox, off by default. Hover a message timestamp to see its positive server message ID; channels that already show view/forward counts retain those details and add the ID on a separate tooltip line. The preference applies immediately and does not widen message bubbles.
   - Inspired by 64Gram's [feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md) and [timestamp implementation](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/history/view/history_view_bottom_info.cpp). This branch uses Telegram Desktop's existing custom-tooltip path and a separate default-off preference.
+
+- **Search a group by message sender (patch 0012).** On a single user-authored message in a basic group or megagroup, the context menu opens that chat's search with the sender filter already selected. The entry is hidden for multi-selection, broadcast channels, and anonymous or non-user senders. It uses TDesktop's existing search navigation and server-side `from_id` filter instead of constructing a `from:` text query.
+  - Ported from 64Gram's [message context-menu action at the pinned commit](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/history/view/history_view_context_menu.cpp).
+  - TDesktop APIs: [searchInChat at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/window/window_session_controller.h), [MessagesSearch request at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/api/api_messages_search.cpp).
 
 - **Automatic download-start acceleration (patch 0007).** The default profile starts with two MTProto download sessions per DC, preserves the upstream per-session startup window of 4 × 128 KiB, and can adapt upward to eight sessions. Upstream timeout and success logic can remove sessions after repeated slow requests and later add them back. Upload concurrency is unchanged. This can help a high-latency link with spare bandwidth, but does not guarantee a higher rate.
   - [TDesktop download manager at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/storage/download_manager_mtproto.cpp)
@@ -80,13 +84,10 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Search messages from a sender.** 64Gram adds “Show messages from” to a single message's context menu in groups and megagroups. This is a direct shortcut to a common task in busy chats; inspect TDesktop's search/navigation APIs before porting so the action filters the current chat and does not start an unrelated global search.
-   - [64Gram context-menu implementation at pinned commit](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/history/view/history_view_context_menu.cpp)
-   - [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
-2. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. Port only after deciding the replacement trigger rules and making replacements easy to undo.
+1. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. A safe port needs clear trigger rules, per-user editing, and predictable undo behavior.
    - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
    - [Kotatogram release notes](https://github.com/kotatogram/kotatogram-desktop/releases)
-3. **Local folders and memory profiling.** Kotatogram lists local folders; keep them client-local and separate from Telegram's synchronized filters. Profile memory separately before tuning caches or media preloading.
+2. **Local folders and memory profiling.** Kotatogram lists local folders; TDesktop already has synchronized chat folders, so a local-only variant would need a clear benefit before taking on separate storage and UI state. Profile memory separately before tuning caches or media preloading.
 
 ## Validation
 
@@ -95,4 +96,5 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 - Patch 0010 was applied after patches 0008 and 0009 in a source fixture. All six hunks matched exactly one source span; its C++ hunks also pass `git apply --check` against that post-0009 fixture.
 - Patches 0001–0009 passed the public Windows Release build, portable packaging, and artifact upload in [run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048).
 - Patches 0001–0010 passed the public Windows Release build, portable packaging, and artifact upload in [run #10](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38724066310); you confirmed the executable starts and verified 8 download sessions in-app.
+- Patch 0012's two semantic hunks match uniquely against the pinned v7.3.1 context-menu source; the repository's semantic parser applies them and local `git diff --check` passes.
 - Patch 0011's 14 old-code blocks match uniquely against the post-0010 v7.3.1 fixtures, and its unified-diff hunk counts are consistent. The first build exposed a missing `mtproto_config.h` include in `share_box.cpp` (MSVC C2027); the include was added. [Run #13](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/39004771173) passed Windows x64 / Qt6 / Release compilation, startup smoke test, portable ZIP validation, and artifact upload. The 101+ message in-app forwarding test remains pending.

@@ -91,4 +91,4 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 - Patch 0010 was applied after patches 0008 and 0009 in a source fixture. All six hunks matched exactly one source span; its C++ hunks also pass `git apply --check` against that post-0009 fixture.
 - Patches 0001–0009 passed the public Windows Release build, portable packaging, and artifact upload in [run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048).
 - Patches 0001–0010 passed the public Windows Release build, portable packaging, and artifact upload in [run #10](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38724066310); you confirmed the executable starts and verified 8 download sessions in-app.
-- Patch 0011's 14 old-code blocks match uniquely against the post-0010 v7.3.1 fixtures, and its unified-diff hunk counts are consistent. Its first full Windows build and 101+ message in-app test remain pending.
+- Patch 0011's 13 old-code blocks match uniquely against the post-0010 v7.3.1 fixtures, and its unified-diff hunk counts are consistent. Its first full Windows build and 101+ message in-app test remain pending.

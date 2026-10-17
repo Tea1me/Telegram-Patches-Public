@@ -90,7 +90,10 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. A safe port needs clear trigger rules, per-user editing, and predictable undo behavior.
+1. **Show the message count before deleting all messages from one sender.** 64Gram documents a sender-wide delete count, and its delete flow queries messages using the sender filter before updating the confirmation UI. Telegram Desktop issue #8642 describes the risk of accidentally deleting a sender's whole chat history with no undo. Before porting, check the exact v7.3.1 moderation path and keep the count tied to the server response rather than estimating from loaded history.
+   - [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
+   - [Telegram Desktop issue #8642](https://github.com/telegramdesktop/tdesktop/issues/8642)
+2. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. A safe port needs clear trigger rules, per-user editing, and predictable undo behavior.
    - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
    - [Kotatogram release notes](https://github.com/kotatogram/kotatogram-desktop/releases)
 2. **Local folders and memory profiling.** Kotatogram lists local folders; TDesktop already has synchronized chat folders, so a local-only variant would need a clear benefit before taking on separate storage and UI state. Profile memory separately before tuning caches or media preloading.

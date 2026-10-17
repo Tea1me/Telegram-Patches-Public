@@ -10,6 +10,7 @@ on:
       - v7.3.1-bulk-forward
       - v7.3.1-search-from-sender
       - v7.3.1-api-credentials
+      - v7.3.1-screen-share-privacy
     paths:
       - .github/workflows/build-v7.3.1-semantic-v3-msys2.yml
       - patches/v7.3.1/**
@@ -127,8 +128,8 @@ jobs:
               | sort
           )
 
-          if [ "${#patches[@]}" -ne 13 ]; then
-            echo "Expected 13 patch files, found ${#patches[@]}."
+          if [ "${#patches[@]}" -ne 14 ]; then
+            echo "Expected 14 patch files, found ${#patches[@]}."
             exit 1
           fi
 
@@ -379,8 +380,8 @@ jobs:
               | wc -l
           )"
 
-          if [ "$count" -ne 13 ]; then
-            echo "Expected 13 generated patches, got $count."
+          if [ "$count" -ne 14 ]; then
+            echo "Expected 14 generated patches, got $count."
             exit 1
           fi
 
@@ -1621,7 +1622,7 @@ jobs:
           - **SHA256:** `$env:PACKAGE_SHA256`
           - **Auto-update:** disabled
           - **Crash reports:** disabled
-          - **Patches:** 13
+          - **Patches:** 14
           "@ |
             Out-File `
               -FilePath $env:GITHUB_STEP_SUMMARY `

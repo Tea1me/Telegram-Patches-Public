@@ -1,0 +1,19 @@
+diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
+index 7a309ac8431993314ee022ab02551935b061f7b5..2b09a9027fdf313bf8bb6e783ef9cee415eb49df 100644
+--- a/Telegram/SourceFiles/core/application.cpp
++++ b/Telegram/SourceFiles/core/application.cpp
+@@ -188,6 +188,14 @@ Application::Application()
+ 
+ 	_platformIntegration->init();
+ 
++	// This opt-in keeps every Telegram top-level window out of screen capture.
++	if (Platform::ScreenshotProtectionSupported()
++		&& qgetenv("TDESKTOP_HIDE_FROM_CAPTURE") == "1") {
++		_screenshotProtection->addContentReason(
++			rpl::single(true),
++			_lifetime);
++	}
++
+ 	passcodeLockChanges(
+ 	) | rpl::on_next([=](bool locked) {
+ 		_shouldLockAt = 0;

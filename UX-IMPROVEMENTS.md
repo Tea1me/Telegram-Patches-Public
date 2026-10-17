@@ -1,12 +1,16 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries thirteen patches total. It includes the download-session controls, batch forwarding above 100 messages, sender-filtered group search, and launch-time API credential overrides.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries fourteen patches total. It includes download-session controls, batch forwarding above 100 messages, sender-filtered group search, launch-time API credential overrides, and optional screen-capture privacy.
 
 ## Implemented
 
 - **Override API credentials at launch (patch 0013).** Set both `TDESKTOP_API_ID` and `TDESKTOP_API_HASH` in the process environment before launch. A positive decimal ID and a 32-character hexadecimal hash are required; invalid or partial overrides fall back together to the compiled pair. The values are loaded once and are not written to Telegram settings. This supports personal credentials without rebuilding the executable.
   - Adapted from Kotatogram’s [runtime environment override at a pinned commit](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/core/launcher.cpp).
   - The override covers phone login, QR login, Passkey initialization, and MTProto connection initialization.
+
+- **Hide Telegram windows from screen capture on demand (patch 0014).** Set `TDESKTOP_HIDE_FROM_CAPTURE=1` before starting the app. This reuses v7.3.1's screenshot-protection manager, which applies to current top-level windows and windows shown later; on supported platforms it includes notification windows. The option is off by default and is read at startup. On Windows 10 2004 or newer, the OS can omit the window from supported capture APIs; older versions fall back to a black area. Capture tools can ignore this request, so it is a convenience privacy control rather than a guarantee.
+  - Inspired by [AyuGram's Streamer Mode](https://github.com/AyuGram/AyuGramDocs/blob/main/desktop/features.md) and [SereinGram's presentation mode](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/platform/win/specific_win.cpp).
+  - [TDesktop v7.3.1 screenshot-protection manager](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/core/core_screenshot_protection.cpp), [Windows implementation](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/platform/win/specific_win.cpp), [Microsoft SetWindowDisplayAffinity documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
 
 - **Show the main data center in Settings → Advanced → Connection type.** Patch 0006 appends the active account's main DC number and refreshes when that DC changes. Individual media can be served from a different DC, so this is a connection diagnostic, not a per-file route indicator. It does not change routing.
   - [settings_advanced.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/settings/sections/settings_advanced.cpp)
@@ -115,18 +119,21 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Custom text replacements.** Kotatogram applies replacements while typing, can undo with Backspace or Ctrl/Cmd+Z, and does not replace pasted text. Its settings manager loads source/target rule pairs into the input replacement engine. This looks useful for repeated replies; a port should preserve undo/paste behavior and make rules easy to edit.
+1. **Proxy latency sorting and unavailable-proxy cleanup.** SereinGram checks saved proxies through Telegram, sorts reachable proxies by measured latency, and can remove unreachable ones. It skips the selected proxy when cleaning and skips Web proxies during tests. This is a practical follow-up to the existing DC test because it helps users with several saved proxies choose a working route; a port must keep checks bounded and never switch the active proxy automatically.
+   - [SereinGram proxy check and list update](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/proxy_tools.cpp)
+   - [SereinGram settings actions](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/settings/services_network.cpp)
+2. **Message filters.** SereinGram offers local regex rules to mask, replace, or hide messages, with chat/topic scopes and a rule tester. This could help filter noisy feeds, but it needs an explicit UI, deterministic rule order, and protections against expensive regex patterns.
+   - [SereinGram feature list](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/README.md)
+3. **Custom text replacements.** Kotatogram applies replacements while typing, supports undo with Backspace or Ctrl/Cmd+Z, and skips pasted text. A port should preserve those editing semantics and make rules easy to maintain.
    - [Kotatogram replacement changelog](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/changelog.txt)
    - [Kotatogram rule loading](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/kotato/kotato_settings.cpp)
-2. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
+4. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
    - [Kotatogram filter model](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/data/data_chat_filters.cpp)
    - [Kotatogram folder settings](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/settings/sections/settings_folders.cpp)
-3. **AyuGram streamer and privacy controls.** AyuGram lists Streamer mode, message history, anti-recall, and flexible ghost mode. Streamer mode looks worth inspecting for screen-sharing privacy; the history and ghost-mode options need a separate review of local retention and read/online-state effects.
-   - [AyuGram Desktop README](https://github.com/AyuGram/AyuGramDesktop)
-   - [AyuGram Desktop feature documentation](https://docs.ayugram.one/desktop/)
 ## Validation
 
-- Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes. Runtime override behavior still needs a Windows build and launch test.
+- Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes.
+- Patches 0001–0013 apply to the pinned v7.3.1 source through the repository's semantic parser. Patch 0014 adds one unique source hunk after platform initialization; runtime capture behavior still needs a Windows build and screen-share test.
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.

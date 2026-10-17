@@ -1,6 +1,6 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries ten patches total, including a main-DC label, conservative download acceleration, an adjustable per-DC download-session policy, an on-demand DC connectivity check, and an optional message-ID tooltip.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries eleven patches total. Alongside the main-DC label and download changes, it includes batch forwarding for selections above 100 messages.
 
 ## Implemented
 
@@ -44,14 +44,16 @@ Your manual test with the policy set to 8 observed eight download sessions, conf
 
 ## Forwarding more than 100 messages
 
-Telegram Desktop defines MaxSelectedItems = 100 in its shared configuration, and the history selection code applies that cap. The forwarding API method accepts a vector of message IDs; its public method schema does not document a 100-ID maximum. The desktop client currently forwards selected IDs as a vector for each source range.
+TDesktop's shared `MaxSelectedItems` is 100, while Telegram publishes the server-side `forwarded_count_max` in its configuration. Patch 0011 raises only history-message selection to a local safety cap of 1000, then splits both the normal ShareBox forward flow and the API forwarding path into requests no larger than the configured server value. A grouped-media batch boundary is moved to keep an album together when the whole group fits within the server limit. The delete action remains limited to 100 selected messages and has a second defensive check.
 
-A forward-only bulk operation is technically feasible by collecting more than 100 IDs and queueing multiple requests of at most 100 IDs. It should preserve source order and grouped media, show progress, and handle partial failure without duplicating already-sent batches. Raising the shared MaxSelectedItems constant would also affect other selection operations such as deleting or grouping items, so that is not a safe shortcut. Server-side restrictions, slow mode, flood waits, and anti-spam rules still apply. This feature is not part of the current patch set.
-- [TDesktop MaxSelectedItems in config.h](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/config.h)
-- [TDesktop history selection cap](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/history/view/history_view_list_widget.cpp)
-- [TDesktop forward request construction](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/apiwrap.cpp)
+This supports selecting and forwarding 101–1000 messages in one user operation; it does not raise the server's per-request limit or bypass slow mode, flood waits, or anti-spam controls. Requests are submitted as batches. If Telegram rejects a batch, already accepted batches are not automatically resent, so a manual retry could duplicate messages that already arrived. The current UI does not show per-batch progress.
+
+- [TDesktop selection cap in config.h](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/config.h)
+- [TDesktop history selection and forwardability](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/history/history_inner_widget.cpp)
+- [TDesktop API forwarding path](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/apiwrap.cpp)
+- [TDesktop recipient ShareBox forwarding path](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/boxes/share_box.cpp)
+- [Telegram's server-provided forwarded_count_max](https://core.telegram.org/api/config)
 - [Telegram messages.forwardMessages method](https://core.telegram.org/method/messages.forwardMessages)
-
 ## Memory use
 
 Telegram Desktop has explicit in-memory media thresholds in storage/file_download.h: 10 MiB for a file, 2 MiB for stickers, and 10 MiB for animated wallpapers and animations. The downloader's largest configured per-session window is 16 × 128 KiB = 2 MiB. Eight sessions can therefore represent up to 16 MiB of requested in-flight data per account/DC at the adaptive ceiling. Automatic starts with two sessions (about 1 MiB of requested part data); manual 8 starts with eight (about 4 MiB). These are transfer windows, not total process memory or a guaranteed resident allocation. Image decoding, Qt caches, visible media, and other accounts add separate usage.
@@ -65,8 +67,9 @@ Reducing media thresholds blindly could change inline playback and cache behavio
   - [SereinGram transfer hook](https://github.com/eltavine/SereinGram/blob/main/Telegram/SourceFiles/serein/network/transfer.cpp)
   - [SereinGram setting definition](https://github.com/eltavine/SereinGram/blob/main/Telegram/SourceFiles/serein/schema/gen/settings/services.h)
 
-- **Kotatogram** lists local folders, compact chat list, custom fonts, and forwarding to multiple chats among its features. Its issue tracker has a 2025 request for a user setting to limit simultaneous downloads, with 1 as the minimum; that is evidence of user demand, not an implemented feature in Kotatogram.
+- **Kotatogram** lists local folders, custom text replacements, compact chat list, custom fonts, and other personal workflow controls. The multi-recipient forward option is already present in this TDesktop version, so it is not duplicated here. Local folders and text replacements are stronger next candidates than diagnostic-only UI; each still needs a separate scope and migration/settings review.
   - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
+  - [TDesktop recipient selection and multi-forward](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/boxes/share_box.cpp)
   - [Kotatogram simultaneous-download limit request](https://github.com/kotatogram/kotatogram-desktop/issues/467)
 
 - **AyuGram Desktop** emphasizes privacy and appearance options such as ghost mode and font customization. Those may suit a separate preferences-focused patch, but are not download or memory optimizations by themselves.
@@ -77,14 +80,15 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Bulk forward above 100.** Add a dedicated action that chunks requests and reports progress; do not raise the global selection cap.
-2. **Memory profile first.** Measure idle, scrolling, animated media, and concurrent downloads before changing media thresholds or caches.
+1. **Measure and reduce memory pressure.** Profile idle, long chat scrolling, animated media, and concurrent downloads first; then target cache/preload budgets with repeatable before/after tests.
+2. **Local folders or text replacements.** Kotatogram shows both as user-facing features; first compare them with Telegram's current folder and editor behavior, then port only the gap that has clear daily value. A local-folder implementation needs special care to stay local and avoid changing synchronized Telegram filters.
+3. **Bulk-forward UI feedback.** The batching logic is implemented; add explicit partial-success status only after a clean way to report how many batches succeeded and failed is identified.
 
 ## Validation
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.
 - Patch 0010 was applied after patches 0008 and 0009 in a source fixture. All six hunks matched exactly one source span; its C++ hunks also pass `git apply --check` against that post-0009 fixture.
-- The public Windows Release build for patches 0001–0008 passed [run #7](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38562517440). You confirmed the executable opens and manually verified eight sessions when configured to 8.
 - Patches 0001–0009 passed the public Windows Release build, portable packaging, and artifact upload in [run #8](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38655275048).
-- Patch 0010 has local semantic-match validation; its public build and in-app checkbox/tooltip behavior still need verification.
+- Patches 0001–0010 passed the public Windows Release build, portable packaging, and artifact upload in [run #10](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/38724066310); you confirmed the executable starts and verified 8 download sessions in-app.
+- Patch 0011's 14 old-code blocks match uniquely against the post-0010 v7.3.1 fixtures, and its unified-diff hunk counts are consistent. Its first full Windows build and 101+ message in-app test remain pending.

@@ -115,8 +115,94 @@ diff --git a/Telegram/SourceFiles/boxes/share_box.cpp b/Telegram/SourceFiles/box
 +			history->session().serverConfig().forwardedCountMax);
  		auto &api = history->session().api();
  		auto &histories = history->owner().histories();
-@@ -1968,8 +1968,36 @@
- 			for (const auto &range : ranges) {
+@@ -1968,86 +1971,115 @@
+-			for (const auto &range : ranges) {
+-				const auto mtpMsgIds = ForwardRangeIds(
+-					&history->session(),
+-					range);
+-				if (mtpMsgIds.isEmpty()) {
+-					continue;
+-				}
+-				const auto msgCount = int(mtpMsgIds.size());
+-				const auto starsPaid = std::min(
+-					options.starsApproved,
+-					msgCount * peer->starsPerMessageChecked());
+-				if (starsPaid) {
+-					options.starsApproved -= starsPaid;
+-				}
+-				const auto sendFlags = commonSendFlags
+-					| (ShouldSendSilent(peer, options)
+-						? Flag::f_silent
+-						: Flag(0))
+-					| (options.shortcutId
+-						? Flag::f_quick_reply_shortcut
+-						: Flag(0))
+-					| (starsPaid ? Flag::f_allow_paid_stars : Flag())
+-					| (sublistPeer ? Flag::f_reply_to : Flag())
+-					| (options.suggest ? Flag::f_suggested_post : Flag())
+-					| (options.effectId ? Flag::f_effect : Flag())
+-					| (range.fromEphemeral
+-						? Flag::f_from_ephemeral
+-						: Flag(0));
+-				auto buildMessage = [=](
+-						not_null<History*> history,
+-						FullReplyTo replyTo)
+-					-> Data::Histories::PreparedMessage {
+-					const auto kGeneralId
+-						= Data::ForumTopic::kGeneralId;
+-					const auto realTopMsgId
+-						= (replyTo.topicRootId == kGeneralId)
+-						? MsgId(0)
+-						: replyTo.topicRootId;
+-					auto flags = sendFlags;
+-					if (realTopMsgId) {
+-						flags |= Flag::f_top_msg_id;
+-					} else {
+-						flags &= ~Flag::f_top_msg_id;
+-					}
+-					auto randoms = QVector<MTPlong>(msgCount);
+-					for (auto &value : randoms) {
+-						value = base::RandomValue<MTPlong>();
+-					}
+-					return MTPmessages_ForwardMessages(
+-						MTP_flags(flags),
+-						fromPeer->input(),
+-						MTP_vector<MTPint>(mtpMsgIds),
+-						MTP_vector<MTPlong>(randoms),
+-						history->peer->input(),
+-						MTP_int(realTopMsgId),
+-						(sublistPeer
+-							? MTP_inputReplyToMonoForum(
+-								sublistPeer->input())
+-							: MTPInputReplyTo()),
+-						MTP_int(options.scheduled),
+-						MTP_int(options.scheduleRepeatPeriod),
+-						MTP_inputPeerEmpty(),
+-						Data::ShortcutIdToMTP(
+-							&history->session(),
+-							options.shortcutId),
+-						MTP_long(options.effectId),
+-						MTP_int(videoTimestamp.value_or(0)),
+-						MTP_long(starsPaid),
+-						Api::SuggestToMTP(options.suggest));
+-				};
+-				const auto requestKey = ++state->nextRequestKey;
+-				state->requests.insert(requestKey);
+-				histories.sendPreparedMessage(
+-					threadHistory,
+-					FullReplyTo{ .topicRootId = topicRootId },
+-					uint64(0),
+-					std::move(buildMessage),
+-					[=](const MTPUpdates &updates,
+-							const MTP::Response &) {
+-						requestDone(updates, requestKey);
+-					},
+-					[=](const MTP::Error &error,
+-							const MTP::Response &) {
+-						requestFail(error, requestKey);
+-					});
+-			}
++			for (const auto &range : ranges) {
 +				const auto total = int(range.items.size());
 +				for (auto batchStart = 0; batchStart < total;) {
 +					auto batchEnd = std::min(
@@ -144,21 +230,93 @@ diff --git a/Telegram/SourceFiles/boxes/share_box.cpp b/Telegram/SourceFiles/box
 +					batchRange.items = std::vector<not_null<HistoryItem*>>(
 +						range.items.begin() + batchStart,
 +						range.items.begin() + batchEnd);
- 				const auto mtpMsgIds = ForwardRangeIds(
- 					&history->session(),
--					range);
-+					batchRange);
++					const auto mtpMsgIds = ForwardRangeIds(
++						&history->session(),
++						batchRange);
 +					batchStart = batchEnd;
- 				if (mtpMsgIds.isEmpty()) {
- 					continue;
- 				}
- 				const auto msgCount = int(mtpMsgIds.size());
-@@ -2049,4 +2049,5 @@
- 						requestFail(error, requestKey);
- 					});
++					if (mtpMsgIds.isEmpty()) {
++						continue;
++					}
++					const auto msgCount = int(mtpMsgIds.size());
++					const auto starsPaid = std::min(
++						options.starsApproved,
++						msgCount * peer->starsPerMessageChecked());
++					if (starsPaid) {
++						options.starsApproved -= starsPaid;
++					}
++					const auto sendFlags = commonSendFlags
++						| (ShouldSendSilent(peer, options)
++							? Flag::f_silent
++							: Flag(0))
++						| (options.shortcutId
++							? Flag::f_quick_reply_shortcut
++							: Flag(0))
++						| (starsPaid ? Flag::f_allow_paid_stars : Flag())
++						| (sublistPeer ? Flag::f_reply_to : Flag())
++						| (options.suggest ? Flag::f_suggested_post : Flag())
++						| (options.effectId ? Flag::f_effect : Flag())
++						| (range.fromEphemeral
++							? Flag::f_from_ephemeral
++							: Flag(0));
++					auto buildMessage = [=](
++							not_null<History*> history,
++							FullReplyTo replyTo)
++						-> Data::Histories::PreparedMessage {
++						const auto kGeneralId
++							= Data::ForumTopic::kGeneralId;
++						const auto realTopMsgId
++							= (replyTo.topicRootId == kGeneralId)
++							? MsgId(0)
++							: replyTo.topicRootId;
++						auto flags = sendFlags;
++						if (realTopMsgId) {
++							flags |= Flag::f_top_msg_id;
++						} else {
++							flags &= ~Flag::f_top_msg_id;
++						}
++						auto randoms = QVector<MTPlong>(msgCount);
++						for (auto &value : randoms) {
++							value = base::RandomValue<MTPlong>();
++						}
++						return MTPmessages_ForwardMessages(
++							MTP_flags(flags),
++							fromPeer->input(),
++							MTP_vector<MTPint>(mtpMsgIds),
++							MTP_vector<MTPlong>(randoms),
++							history->peer->input(),
++							MTP_int(realTopMsgId),
++							(sublistPeer
++								? MTP_inputReplyToMonoForum(
++									sublistPeer->input())
++								: MTPInputReplyTo()),
++							MTP_int(options.scheduled),
++							MTP_int(options.scheduleRepeatPeriod),
++							MTP_inputPeerEmpty(),
++							Data::ShortcutIdToMTP(
++								&history->session(),
++								options.shortcutId),
++							MTP_long(options.effectId),
++							MTP_int(videoTimestamp.value_or(0)),
++							MTP_long(starsPaid),
++							Api::SuggestToMTP(options.suggest));
++					};
++					const auto requestKey = ++state->nextRequestKey;
++					state->requests.insert(requestKey);
++					histories.sendPreparedMessage(
++						threadHistory,
++						FullReplyTo{ .topicRootId = topicRootId },
++						uint64(0),
++						std::move(buildMessage),
++						[=](const MTPUpdates &updates,
++								const MTP::Response &) {
++							requestDone(updates, requestKey);
++						},
++						[=](const MTP::Error &error,
++								const MTP::Response &) {
++							requestFail(error, requestKey);
++						});
 +				}
- 			}
- 		}
++			}
 diff --git a/Telegram/SourceFiles/history/history_widget.cpp b/Telegram/SourceFiles/history/history_widget.cpp
 --- a/Telegram/SourceFiles/history/history_widget.cpp
 +++ b/Telegram/SourceFiles/history/history_widget.cpp

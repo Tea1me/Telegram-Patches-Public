@@ -5,7 +5,7 @@ Subject: [PATCH] Add search-from-sender action to group message menu
 diff --git a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
 --- a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
 +++ b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
-@@ -1401,1 +1401,24 @@
+@@ -1401,1 +1401,23 @@
 +void AddSearchFromAction(
 +		not_null<Ui::PopupMenu*> menu,
 +		const ContextMenuRequest &request,
@@ -29,7 +29,7 @@ diff --git a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp b/T
 +}
 +
  void AddMessageActions(
-@@ -1405,3 +1428,4 @@
+@@ -1405,3 +1427,4 @@
  	AddPostLinkAction(menu, request);
  	AddForwardAction(menu, request, list);
 +	AddSearchFromAction(menu, request, list);

@@ -96,7 +96,7 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 2. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. A safe port needs clear trigger rules, per-user editing, and predictable undo behavior.
    - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
    - [Kotatogram release notes](https://github.com/kotatogram/kotatogram-desktop/releases)
-2. **Local folders and memory profiling.** Kotatogram lists local folders; TDesktop already has synchronized chat folders, so a local-only variant would need a clear benefit before taking on separate storage and UI state. Profile memory separately before tuning caches or media preloading.
+3. **Local folders and memory profiling.** Kotatogram lists local folders; TDesktop already has synchronized chat folders, so a local-only variant would need a clear benefit before taking on separate storage and UI state. Profile memory separately before tuning caches or media preloading.
 
 ## Validation
 

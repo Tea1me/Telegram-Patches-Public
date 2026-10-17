@@ -1,6 +1,6 @@
 # v7.3.1 UX patch research
 
-This branch keeps the five patches from the successful v7.3.1 baseline and carries fourteen patches total. It includes download-session controls, batch forwarding above 100 messages, sender-filtered group search, launch-time API credential overrides, and optional screen-capture privacy.
+This branch keeps the five patches from the successful v7.3.1 baseline and carries sixteen patches total. It includes download-session controls, batch forwarding above 100 messages, sender-filtered group search, launch-time API credential overrides, optional screen-capture privacy, a runtime API ID indicator, and saved-proxy testing/sorting/cleanup.
 
 ## Implemented
 
@@ -11,6 +11,12 @@ This branch keeps the five patches from the successful v7.3.1 baseline and carri
 - **Hide Telegram windows from screen capture on demand (patch 0014).** Set `TDESKTOP_HIDE_FROM_CAPTURE=1` before starting the app. This reuses v7.3.1's screenshot-protection manager, which applies to current top-level windows and windows shown later; on supported platforms it includes notification windows. The option is off by default and is read at startup. On Windows 10 2004 or newer, the OS can omit the window from supported capture APIs; older versions fall back to a black area. Capture tools can ignore this request, so it is a convenience privacy control rather than a guarantee.
   - Inspired by [AyuGram's Streamer Mode](https://github.com/AyuGram/AyuGramDocs/blob/main/desktop/features.md) and [SereinGram's presentation mode](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/platform/win/specific_win.cpp).
   - [TDesktop v7.3.1 screenshot-protection manager](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/core/core_screenshot_protection.cpp), [Windows implementation](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/platform/win/specific_win.cpp), [Microsoft SetWindowDisplayAffinity documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
+
+- **Show the active API ID and its source (patch 0015).** Advanced → Data and Storage shows the cached API ID and whether the launch-time environment pair or build defaults were selected. Clicking copies only the ID. The API hash is not displayed or copied.
+
+- **Test and manage saved proxies (patch 0016).** Advanced → Data & Storage can sort saved SOCKS5, HTTP, and MTProto proxies by handshake RTT to the active account's main DC, or remove confirmed-unavailable entries after a confirmation. It tests at most four proxies concurrently and stops after 15 seconds. Reachable entries sort by latency; Web proxies and incomplete checks stay ahead of confirmed failures. Cleanup preserves the currently selected proxy, Web proxies, and untested entries. Sorting preserves proxy-rotation preferences; neither action switches the active route.
+  - Adapted from SereinGram's [proxy test and list actions](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/network/proxy_tools.cpp), [latency ordering](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/network/proxy_order.cpp), and [network settings rows](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/settings/services_network.cpp). The port adds a four-proxy concurrency cap, a bounded timeout, stale-list checks, and confirmation before removal.
+  - Uses Telegram Desktop's existing [proxy checker](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/mtproto/proxy_check.cpp) and [proxy-list settings](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/core/core_settings_proxy.cpp).
 
 - **Show the main data center in Settings → Advanced → Connection type.** Patch 0006 appends the active account's main DC number and refreshes when that DC changes. Individual media can be served from a different DC, so this is a connection diagnostic, not a per-file route indicator. It does not change routing.
   - [settings_advanced.cpp at v7.3.1](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/SourceFiles/settings/sections/settings_advanced.cpp)
@@ -58,6 +64,8 @@ Do not commit or share the file containing your personal values. The branch supp
 - [Upstream v7.3.1 CMake options](https://github.com/telegramdesktop/tdesktop/blob/v7.3.1/Telegram/cmake/telegram_options.cmake)
 - [Telegram Desktop API credential instructions](https://github.com/telegramdesktop/tdesktop/blob/dev/docs/api_credentials.md)
 
+The Current API ID row in Advanced → Data and Storage reads the same cached credential result as the API request sites. It can confirm which ID the resolver selected; it intentionally does not show the API hash.
+
 ## Verifying transfer acceleration
 
 Packet capture counts TCP flows, not Telegram's internal download-session indexes. Four visible flows can include the main account connection, sessions for multiple DCs, CDN traffic, proxy connections, or multiple accounts. The count alone cannot confirm that the custom download policy is active.
@@ -96,7 +104,9 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ## Other open-source client references
 
-- **SereinGram** provides a user opt-in faster-transfers switch. Its transfer hook starts at four download sessions, uses the maximum per-session download window, and multiplies the upload window by four; its generated setting defaults to false. This branch borrows only a conservative download-side control and leaves upload behavior unchanged.
+- **SereinGram** also provides proxy latency sorting, unavailable-proxy cleanup, notes, subscriptions, and optional faster transfers. Patch 0016 adapts the saved-proxy tools and leaves the active route unchanged. Its transfer hook starts at four download sessions and changes upload windows too; this branch keeps its existing download-only policy.
+  - [SereinGram proxy test and list actions](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/network/proxy_tools.cpp)
+  - [SereinGram latency ordering](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/network/proxy_order.cpp)
   - [SereinGram transfer hook](https://github.com/eltavine/SereinGram/blob/main/Telegram/SourceFiles/serein/network/transfer.cpp)
   - [SereinGram setting definition](https://github.com/eltavine/SereinGram/blob/main/Telegram/SourceFiles/serein/schema/gen/settings/services.h)
 
@@ -119,21 +129,18 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Proxy latency sorting and unavailable-proxy cleanup.** SereinGram checks saved proxies through Telegram, sorts reachable proxies by measured latency, and can remove unreachable ones. It skips the selected proxy when cleaning and skips Web proxies during tests. This is a practical follow-up to the existing DC test because it helps users with several saved proxies choose a working route; a port must keep checks bounded and never switch the active proxy automatically.
-   - [SereinGram proxy check and list update](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/network/proxy_tools.cpp)
-   - [SereinGram settings actions](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/Telegram/SourceFiles/serein/settings/services_network.cpp)
-2. **Message filters.** SereinGram offers local regex rules to mask, replace, or hide messages, with chat/topic scopes and a rule tester. This could help filter noisy feeds, but it needs an explicit UI, deterministic rule order, and protections against expensive regex patterns.
+1. **Message filters.** SereinGram offers local regex rules to mask, replace, or hide messages, with chat/topic scopes and a rule tester. This could help filter noisy feeds, but it needs an explicit UI, deterministic rule order, and protections against expensive regex patterns.
    - [SereinGram feature list](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/README.md)
-3. **Custom text replacements.** Kotatogram applies replacements while typing, supports undo with Backspace or Ctrl/Cmd+Z, and skips pasted text. A port should preserve those editing semantics and make rules easy to maintain.
+2. **Custom text replacements.** Kotatogram applies replacements while typing, supports undo with Backspace or Ctrl/Cmd+Z, and skips pasted text. A port should preserve those editing semantics and make rules easy to maintain.
    - [Kotatogram replacement changelog](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/changelog.txt)
    - [Kotatogram rule loading](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/kotato/kotato_settings.cpp)
-4. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
+3. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
    - [Kotatogram filter model](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/data/data_chat_filters.cpp)
    - [Kotatogram folder settings](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/settings/sections/settings_folders.cpp)
 ## Validation
 
 - Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes.
-- Patches 0001–0013 apply to the pinned v7.3.1 source through the repository's semantic parser. Patch 0014 adds one unique source hunk after platform initialization; runtime capture behavior still needs a Windows build and screen-share test.
+- Patches 0001–0016 apply to the pinned v7.3.1 source through the repository's semantic parser. Patches 0015 and 0016 match unique source locations after the preceding patches; local `git diff --check` passes. A full Windows compile is still required to verify the API ID row and proxy tools at runtime.
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.

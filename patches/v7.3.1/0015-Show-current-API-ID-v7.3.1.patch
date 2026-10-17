@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Show the active API ID in advanced settings
+
+---
+diff --git a/Telegram/SourceFiles/config.h b/Telegram/SourceFiles/config.h
+--- a/Telegram/SourceFiles/config.h
++++ b/Telegram/SourceFiles/config.h
+@@ -1,4 +1,5 @@
+ struct TelegramApiCredentials {
+ 	int id = 0;
+ 	QString hash;
++	bool fromEnvironment = false;
+ };
+@@ -1,5 +1,6 @@
+ 		if (idOk && id > 0 && hashOk) {
+ 			return TelegramApiCredentials{
+ 				id,
+ 				QString::fromLatin1(hashBytes.constData(), hashBytes.size()).toLower(),
++				true,
+ 			};
+@@ -1,5 +1,9 @@
+ inline int ApiId() {
+ 	return CurrentTelegramApiCredentials().id;
+ }
+ 
++inline bool ApiCredentialsFromEnvironment() {
++	return CurrentTelegramApiCredentials().fromEnvironment;
++}
++
+ inline QString ApiHash() {
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -1,1 +1,2 @@
+ #include "boxes/about_box.h"
++#include "config.h"
+@@ -1,3 +1,5 @@
+ #include <array>
+ #include <optional>
+ #include <utility>
++#include <QtGui/QClipboard>
++#include <QtGui/QGuiApplication>
+@@ -1,9 +1,29 @@ void BuildDataStorageSection(SectionBuilder &builder) {
+ 		.keywords = {
+ 			u"connection"_q, u"network"_q, u"data center"_q, u"dc"_q,
+ 			u"ping"_q, u"latency"_q, u"diagnostic"_q,
+ 		},
+ 	});
+ 
++	const auto apiId = ApiId();
++	const auto apiIdLabel = QString::number(apiId)
++		+ u" · "_q
++		+ (ApiCredentialsFromEnvironment()
++			? tr::lng_tpatch_api_id_runtime(tr::now)
++			: tr::lng_tpatch_api_id_build_default(tr::now));
++	builder.addButton({
++		.id = u"advanced/api_id"_q,
++		.title = tr::lng_tpatch_current_api_id(),
++		.icon = { &st::menuIconNetwork },
++		.label = rpl::single(apiIdLabel) | rpl::type_erased,
++		.onClick = [=] {
++			QGuiApplication::clipboard()->setText(QString::number(apiId));
++		},
++		.keywords = {
++			u"api"_q, u"id"_q, u"credentials"_q, u"environment"_q,
++			u"custom"_q, u"build default"_q,
++		},
++	});
++
+ 	builder.addButton({
+ 		.id = u"advanced/downloads"_q,
+ 		.title = tr::lng_downloads_section(),
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -1,1 +1,4 @@
+ "lng_tpatch_dc_status_retry" = "Test again";
++"lng_tpatch_current_api_id" = "Current API ID (click to copy)";
++"lng_tpatch_api_id_runtime" = "Runtime environment";
++"lng_tpatch_api_id_build_default" = "Build default";

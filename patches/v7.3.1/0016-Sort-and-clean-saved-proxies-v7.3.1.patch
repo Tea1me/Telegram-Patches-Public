@@ -1,0 +1,428 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Add saved proxy sorting and cleanup tools
+
+---
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+index 54eba3f..62b4d64 100644
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -5724,6 +5724,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ "lng_tpatch_current_api_id" = "Current API ID (click to copy)";
+ "lng_tpatch_api_id_runtime" = "Runtime environment";
+ "lng_tpatch_api_id_build_default" = "Build default";
++"lng_tpatch_sort_proxies_by_latency" = "Sort saved proxies by latency";
++"lng_tpatch_remove_unavailable_proxies" = "Remove unavailable proxies";
++"lng_tpatch_proxies_check_busy" = "Another saved proxy check is already running.";
++"lng_tpatch_proxies_empty" = "No saved proxies to check.";
++"lng_tpatch_proxies_checking" = "Checking {amount} saved proxies…";
++"lng_tpatch_proxies_changed" = "The saved proxy list changed during the check. No changes were made.";
++"lng_tpatch_proxies_sorted" = "Sorted {reachable} reachable proxies by latency; {untested} were not tested (out of {total}).";
++"lng_tpatch_proxies_none_unavailable" = "No confirmed unavailable, unselected proxies were found.";
++"lng_tpatch_proxies_remove_title" = "Remove unavailable proxies?";
++"lng_tpatch_proxies_remove_confirmation" = "Remove {amount} saved proxies that could not connect? The currently selected proxy will be kept.";
++"lng_tpatch_proxies_removed" = "Removed {amount} unavailable proxies.";
+ "lng_tpatch_show_message_ids" = "Show message IDs in timestamp tooltip";
+ "lng_tpatch_message_id" = "Message ID";
+ "lng_tpatch_bulk_forward_delete_limit" = "Delete is available for up to 100 selected messages.";
+diff --git a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+index 5caa403..c51ef76 100644
+--- a/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_advanced.cpp
+@@ -38,10 +38,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "main/main_domain.h"
+ #include "main/main_session.h"
+ #include "main/main_session_settings.h"
++#include "main/session/session_show.h"
+ #include "mtproto/connection_abstract.h"
+ #include "mtproto/facade.h"
+ #include "mtproto/mtproto_dc_options.h"
+ #include "mtproto/mtproto_proxy_data.h"
++#include "mtproto/proxy_check.h"
+ #include "mtproto/mtp_instance.h"
+ #include "platform/platform_specific.h"
+ #include "settings/settings_builder.h"
+@@ -91,7 +93,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #endif // !TDESKTOP_DISABLE_SPELLCHECK
+ 
+ #include <ksandbox.h>
++#include <algorithm>
+ #include <array>
++#include <memory>
+ #include <optional>
+ #include <utility>
+ #include <QtGui/QClipboard>
+@@ -274,6 +278,335 @@ void TpatchDcConnectivityBox(
+ 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
+ }
+ 
++constexpr auto kTpatchProxyCheckTimeout = crl::time(15000);
++constexpr auto kTpatchProxyCheckConcurrency = 4;
++
++using TpatchProxyConnection = MTP::details::AbstractConnection;
++
++struct TpatchProxyResult {
++	MTP::ProxyData proxy;
++	std::optional<int> ping;
++	int originalIndex = 0;
++	bool tested = false;
++};
++
++struct TpatchProxyEntry {
++	TpatchProxyResult result;
++	MTP::ProxyCheckConnection v4;
++	MTP::ProxyCheckConnection v6;
++	bool finished = false;
++};
++
++class TpatchProxyProbe final : public base::has_weak_ptr {
++public:
++	using Done = Fn<void(std::vector<TpatchProxyResult>)>;
++
++	TpatchProxyProbe(
++		not_null<MTP::Instance*> mtp,
++		const std::vector<MTP::ProxyData> &proxies,
++		Done done);
++	~TpatchProxyProbe();
++
++private:
++	void startNext();
++	void start(TpatchProxyEntry *entry);
++	void finish(TpatchProxyEntry *entry, std::optional<int> ping);
++	void failed(TpatchProxyEntry *entry, TpatchProxyConnection *raw);
++	void complete();
++	void timedOut();
++
++	const not_null<MTP::Instance*> _mtp;
++	std::vector<std::unique_ptr<TpatchProxyEntry>> _entries;
++	Done _done;
++	base::Timer _timeout;
++	int _next = 0;
++	int _active = 0;
++	bool _pumping = false;
++	bool _completed = false;
++};
++
++bool TpatchProxyOperationBusy = false;
++
++TpatchProxyProbe::TpatchProxyProbe(
++		not_null<MTP::Instance*> mtp,
++		const std::vector<MTP::ProxyData> &proxies,
++		Done done)
++: _mtp(mtp)
++, _done(std::move(done))
++, _timeout([=] { timedOut(); }) {
++	TpatchProxyOperationBusy = true;
++	for (auto index = 0; index != int(proxies.size()); ++index) {
++		auto entry = std::make_unique<TpatchProxyEntry>();
++		entry->result.proxy = proxies[index];
++		entry->result.originalIndex = index;
++		_entries.push_back(std::move(entry));
++	}
++	_timeout.callOnce(kTpatchProxyCheckTimeout);
++	startNext();
++}
++
++TpatchProxyProbe::~TpatchProxyProbe() {
++	for (const auto &entry : _entries) {
++		MTP::ResetProxyCheckers(entry->v4, entry->v6);
++	}
++	TpatchProxyOperationBusy = false;
++}
++
++void TpatchProxyProbe::startNext() {
++	if (_pumping || _completed) {
++		return;
++	}
++	_pumping = true;
++	while (_active < kTpatchProxyCheckConcurrency
++		&& _next < int(_entries.size())) {
++		auto *entry = _entries[_next++].get();
++		if (entry->result.proxy.type == MTP::ProxyData::Type::Web) {
++			entry->finished = true;
++			continue;
++		}
++		++_active;
++		start(entry);
++	}
++	_pumping = false;
++	if ((_next == int(_entries.size())) && !_active) {
++		complete();
++	}
++}
++
++void TpatchProxyProbe::start(TpatchProxyEntry *entry) {
++	const auto weak = base::make_weak(this);
++	MTP::StartProxyCheck(
++		_mtp,
++		entry->result.proxy,
++		Core::App().settings().proxy().tryIPv6(),
++		entry->v4,
++		entry->v6,
++		[=](TpatchProxyConnection *raw, int ping) {
++			if (const auto strong = weak.get()) {
++				if (!strong->_completed && !entry->finished) {
++					MTP::DropProxyChecker(entry->v4, entry->v6, raw);
++					strong->finish(entry, ping);
++				}
++			}
++		},
++		[=](TpatchProxyConnection *raw) {
++			if (const auto strong = weak.get()) {
++				if (!strong->_completed && !entry->finished) {
++					strong->failed(entry, raw);
++				}
++			}
++		});
++	if (!entry->finished
++		&& !MTP::HasProxyCheckers(entry->v4, entry->v6)) {
++		entry->finished = true;
++		entry->result.tested = true;
++		--_active;
++	}
++}
++
++void TpatchProxyProbe::failed(
++		TpatchProxyEntry *entry,
++		TpatchProxyConnection *raw) {
++	MTP::DropProxyChecker(entry->v4, entry->v6, raw);
++	if (!MTP::HasProxyCheckers(entry->v4, entry->v6)) {
++		finish(entry, std::nullopt);
++	}
++}
++
++void TpatchProxyProbe::finish(
++		TpatchProxyEntry *entry,
++		std::optional<int> ping) {
++	if (entry->finished) {
++		return;
++	}
++	entry->finished = true;
++	entry->result.tested = true;
++	entry->result.ping = ping;
++	MTP::ResetProxyCheckers(entry->v4, entry->v6);
++	--_active;
++	startNext();
++}
++
++void TpatchProxyProbe::complete() {
++	if (_completed) {
++		return;
++	}
++	_completed = true;
++	_timeout.cancel();
++	auto results = std::vector<TpatchProxyResult>();
++	for (const auto &entry : _entries) {
++		results.push_back(entry->result);
++	}
++	crl::on_main(this, [=, done = base::take(_done)] {
++		done(results);
++	});
++}
++
++void TpatchProxyProbe::timedOut() {
++	if (_completed) {
++		return;
++	}
++	_completed = true;
++	for (const auto &entry : _entries) {
++		MTP::ResetProxyCheckers(entry->v4, entry->v6);
++		if (!entry->finished) {
++			entry->finished = true;
++			entry->result.tested = false;
++			entry->result.ping.reset();
++		}
++	}
++	auto results = std::vector<TpatchProxyResult>();
++	for (const auto &entry : _entries) {
++		results.push_back(entry->result);
++	}
++	crl::on_main(this, [=, done = base::take(_done)] {
++		done(results);
++	});
++}
++
++enum class TpatchProxyAction {
++	SortByLatency,
++	RemoveUnavailable,
++};
++
++void TpatchApplyProxyResults(
++		std::shared_ptr<Main::SessionShow> show,
++		const std::vector<MTP::ProxyData> &checked,
++		std::vector<TpatchProxyResult> results,
++		TpatchProxyAction action) {
++	auto &settings = Core::App().settings().proxy();
++	if (settings.list() != checked) {
++		show->showToast(tr::lng_tpatch_proxies_changed(tr::now));
++		return;
++	}
++	const auto selected = settings.selected();
++	if (action == TpatchProxyAction::SortByLatency) {
++		const auto rank = [](const TpatchProxyResult &result) {
++			return result.ping ? 0 : !result.tested ? 1 : 2;
++		};
++		std::stable_sort(
++			results.begin(),
++			results.end(),
++			[&](const auto &a, const auto &b) {
++				const auto rankA = rank(a);
++				const auto rankB = rank(b);
++				if (rankA != rankB) {
++					return rankA < rankB;
++				}
++				return (rankA == 0) && (*a.ping < *b.ping);
++			});
++		auto sorted = std::vector<MTP::ProxyData>();
++		auto newIndices = std::vector<int>(checked.size());
++		sorted.reserve(results.size());
++		for (auto index = 0; index != int(results.size()); ++index) {
++			const auto &result = results[index];
++			sorted.push_back(result.proxy);
++			newIndices[result.originalIndex] = index;
++		}
++		auto preferred = std::vector<int>();
++		for (const auto oldIndex : settings.proxyRotationPreferredIndices()) {
++			if (oldIndex >= 0 && oldIndex < int(newIndices.size())) {
++				preferred.push_back(newIndices[oldIndex]);
++			}
++		}
++		const auto reachable = int(std::count_if(
++			results.begin(),
++			results.end(),
++			[](const TpatchProxyResult &result) {
++				return result.ping.has_value();
++			}));
++		const auto untested = int(std::count_if(
++			results.begin(),
++			results.end(),
++			[](const TpatchProxyResult &result) {
++				return !result.tested;
++			}));
++		settings.list() = std::move(sorted);
++		settings.setProxyRotationPreferredIndices(std::move(preferred));
++		Core::App().proxyRotationSettingsChanged();
++		Local::writeSettings();
++		show->showToast(tr::lng_tpatch_proxies_sorted(
++			tr::now,
++			lt_reachable,
++			QString::number(reachable),
++			lt_untested,
++			QString::number(untested),
++			lt_total,
++			QString::number(int(checked.size()))));
++		return;
++	}
++	const auto removable = int(std::count_if(
++		results.begin(),
++		results.end(),
++		[&](const TpatchProxyResult &result) {
++			return result.tested && !result.ping && (result.proxy != selected);
++		}));
++	if (!removable) {
++		show->showToast(tr::lng_tpatch_proxies_none_unavailable(tr::now));
++		return;
++	}
++	show->showBox(Ui::MakeConfirmBox({
++		.text = tr::lng_tpatch_proxies_remove_confirmation(
++			tr::now,
++			lt_amount,
++			QString::number(removable)),
++		.confirmed = [=](Fn<void()> close) {
++			auto &current = Core::App().settings().proxy();
++			if (current.list() != checked) {
++				show->showToast(tr::lng_tpatch_proxies_changed(tr::now));
++				close();
++				return;
++			}
++			auto removed = 0;
++			for (const auto &result : results) {
++				if (result.tested
++					&& !result.ping
++					&& (result.proxy != current.selected())
++					&& current.removeFromList(result.proxy)) {
++					++removed;
++				}
++			}
++			Core::App().proxyRotationSettingsChanged();
++			Local::writeSettings();
++			close();
++			show->showToast(tr::lng_tpatch_proxies_removed(
++				tr::now,
++				lt_amount,
++				QString::number(removed)));
++		},
++		.confirmText = tr::lng_box_delete(),
++		.title = tr::lng_tpatch_proxies_remove_title(),
++	}));
++}
++
++void TpatchRunProxyAction(
++		std::shared_ptr<Main::SessionShow> show,
++		not_null<MTP::Instance*> mtp,
++		TpatchProxyAction action) {
++	if (TpatchProxyOperationBusy) {
++		show->showToast(tr::lng_tpatch_proxies_check_busy(tr::now));
++		return;
++	}
++	const auto checked = Core::App().settings().proxy().list();
++	if (checked.empty()) {
++		show->showToast(tr::lng_tpatch_proxies_empty(tr::now));
++		return;
++	}
++	const auto holder = show->session().lifetime().make_state<
++		std::unique_ptr<TpatchProxyProbe>>();
++	*holder = std::make_unique<TpatchProxyProbe>(
++		mtp,
++		checked,
++		[=](std::vector<TpatchProxyResult> results) {
++			holder->reset();
++			TpatchApplyProxyResults(show, checked, std::move(results), action);
++		});
++	show->showToast(tr::lng_tpatch_proxies_checking(
++		tr::now,
++		lt_amount,
++		QString::number(checked.size())));
++}
++
+ void BuildDataStorageSection(SectionBuilder &builder) {
+ 	const auto controller = builder.controller();
+ 	const auto container = builder.container();
+@@ -440,6 +773,38 @@ void BuildDataStorageSection(SectionBuilder &builder) {
+ 		},
+ 	});
+ 
++	builder.addButton({
++		.id = u"advanced/proxy_sort"_q,
++		.title = tr::lng_tpatch_sort_proxies_by_latency(),
++		.icon = { &st::menuIconNetwork },
++		.onClick = [=] {
++			TpatchRunProxyAction(
++				controller->uiShow(),
++				&account->mtp(),
++				TpatchProxyAction::SortByLatency);
++		},
++		.keywords = {
++			u"proxy"_q, u"sort"_q, u"ping"_q, u"latency"_q,
++			u"network"_q, u"fastest"_q,
++		},
++	});
++
++	builder.addButton({
++		.id = u"advanced/proxy_cleanup"_q,
++		.title = tr::lng_tpatch_remove_unavailable_proxies(),
++		.icon = { &st::menuIconNetwork },
++		.onClick = [=] {
++			TpatchRunProxyAction(
++				controller->uiShow(),
++				&account->mtp(),
++				TpatchProxyAction::RemoveUnavailable);
++		},
++		.keywords = {
++			u"proxy"_q, u"unavailable"_q, u"remove"_q,
++			u"cleanup"_q, u"network"_q,
++		},
++	});
++
+ 	const auto apiId = ApiId();
+ 	const auto apiIdLabel = QString::number(apiId)
+ 		+ u" · "_q

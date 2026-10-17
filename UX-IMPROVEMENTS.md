@@ -80,9 +80,13 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Measure and reduce memory pressure.** Profile idle, long chat scrolling, animated media, and concurrent downloads first; then target cache/preload budgets with repeatable before/after tests.
-2. **Local folders or text replacements.** Kotatogram shows both as user-facing features; first compare them with Telegram's current folder and editor behavior, then port only the gap that has clear daily value. A local-folder implementation needs special care to stay local and avoid changing synchronized Telegram filters.
-3. **Bulk-forward UI feedback.** The batching logic is implemented; add explicit partial-success status only after a clean way to report how many batches succeeded and failed is identified.
+1. **Search messages from a sender.** 64Gram adds “Show messages from” to a single message's context menu in groups and megagroups. This is a direct shortcut to a common task in busy chats; inspect TDesktop's search/navigation APIs before porting so the action filters the current chat and does not start an unrelated global search.
+   - [64Gram context-menu implementation at pinned commit](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/Telegram/SourceFiles/history/view/history_view_context_menu.cpp)
+   - [64Gram feature list](https://github.com/jolygmanka/64gram/blob/715612054aa9e3ec94b5ab7e748d3000320a671e/features.md)
+2. **Custom text replacements.** Kotatogram lists this as a supported feature; it can save time for repeated replies, signatures, or common snippets. Port only after deciding the replacement trigger rules and making replacements easy to undo.
+   - [Kotatogram README](https://github.com/kotatogram/kotatogram-desktop)
+   - [Kotatogram release notes](https://github.com/kotatogram/kotatogram-desktop/releases)
+3. **Local folders and memory profiling.** Kotatogram lists local folders; keep them client-local and separate from Telegram's synchronized filters. Profile memory separately before tuning caches or media preloading.
 
 ## Validation
 

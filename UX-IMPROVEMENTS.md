@@ -129,18 +129,22 @@ Reducing media thresholds blindly could change inline playback and cache behavio
 
 ### Candidate next work
 
-1. **Message filters.** SereinGram offers local regex rules to mask, replace, or hide messages, with chat/topic scopes and a rule tester. This could help filter noisy feeds, but it needs an explicit UI, deterministic rule order, and protections against expensive regex patterns.
+1. **Local deleted/edit history (highest-impact candidate).** AyuGram stores deleted-message text in memory plus a database (so the deleted view does not survive restart) and keeps edit history in its database. SereinGram goes further with encrypted local storage, retention controls, per-chat exclusions, and a chat-like viewer. A useful port should be optional and default-off, account-isolated, bounded by retention, and captured before Telegram Desktop removes or overwrites the live item. This is a multi-area change: deletion/edit hooks, local storage, settings, and history viewing—not a small UI tweak.
+   - [AyuGram message-saving behavior](https://github.com/AyuGram/AyuGramDocs/blob/main/desktop/saving.md)
+   - [SereinGram history architecture at pinned commit](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/docs/serein/architecture.md)
+   - [SereinGram recording hooks at pinned commit](https://github.com/eltavine/SereinGram/blob/7ac68613f9a1a379e3c2e29fec1361de35064845/Telegram/SourceFiles/serein/features/history/recording.cpp)
+2. **Message filters.** SereinGram offers local rules to mask, replace, or hide messages, with chat/topic scopes and a tester. This can clean up noisy feeds and spam, but needs predictable rule order and protection against expensive regular expressions.
    - [SereinGram feature list](https://github.com/eltavine/SereinGram/blob/09887d863799262d05810c18faa1bfbc5917f5c6/README.md)
-2. **Custom text replacements.** Kotatogram applies replacements while typing, supports undo with Backspace or Ctrl/Cmd+Z, and skips pasted text. A port should preserve those editing semantics and make rules easy to maintain.
-   - [Kotatogram replacement changelog](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/changelog.txt)
-   - [Kotatogram rule loading](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/kotato/kotato_settings.cpp)
-3. **Local folders.** Kotatogram has a separate local-filter model, which can organize chats without changing Telegram's synced folders. The port needs separate per-account storage and clear folder precedence in the chat list.
+3. **Local folders.** Kotatogram's local filter model can organize chats independently of Telegram's synced folders. It is useful for accounts with many chats, but the port needs per-account persistence and clear precedence with cloud folders.
    - [Kotatogram filter model](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/data/data_chat_filters.cpp)
    - [Kotatogram folder settings](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/settings/sections/settings_folders.cpp)
+4. **Custom text replacements.** Kotatogram applies replacements while typing, supports undo with Backspace or Ctrl/Cmd+Z, and skips pasted text. This is lower priority than history or filtering, but could save time for repeated phrases.
+   - [Kotatogram replacement changelog](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/changelog.txt)
+   - [Kotatogram rule loading](https://github.com/kotatogram/kotatogram-desktop/blob/4561e1a33bb55feb692282d8ae5ba1bf6f7a72f3/Telegram/SourceFiles/kotato/kotato_settings.cpp)
 ## Validation
 
 - Patch 0013’s 11 semantic hunks apply uniquely to exact v7.3.1 source files for configuration, phone login, QR login, passkeys, MTProto session initialization, and crash annotations; local `git diff --check` passes.
-- Patches 0001–0016 apply to the pinned v7.3.1 source through the repository's semantic parser. Patches 0015 and 0016 match unique source locations after the preceding patches; local `git diff --check` passes. A full Windows compile is still required to verify the API ID row and proxy tools at runtime.
+- Patches 0001–0016 apply to the pinned v7.3.1 source through the repository's semantic parser. Patches 0015 and 0016 match unique source locations after the preceding patches; local `git diff --check` passes. [Public run #21](https://github.com/Tea1me/Telegram-Patches-Public/actions/runs/39057712528) passed Windows x64 / Qt6 / Release compilation, portable package validation, and artifact upload. This confirms build and packaging; runtime checks of the API ID row and proxy actions remain pending.
 
 - Patches 0008 and 0009 pass local application and diff-format checks against the pinned v7.3.1 source after the earlier patches; patch 0009's seven hunks each resolve uniquely.
 - The semantic patch parser matched all patch 0009 source blocks uniquely; the patch was applied to a clean local source worktree and `git diff --check` passed.

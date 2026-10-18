@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Download all media from the current chat
+
+---
+diff --git a/Telegram/SourceFiles/window/window_peer_menu.cpp b/Telegram/SourceFiles/window/window_peer_menu.cpp
+--- a/Telegram/SourceFiles/window/window_peer_menu.cpp
++++ b/Telegram/SourceFiles/window/window_peer_menu.cpp
+@@ -1,1 +1,3 @@
+ #include "export/export_manager.h"
++#include "export/export_settings.h"
++#include "export/view/export_view_settings.h"
+@@ -1,1 +1,2 @@
+ #include "main/main_session_settings.h"
++#include "storage/storage_account.h"
+@@ -1,1 +1,2 @@
+-	void addExportChat();
++	void addExportChat();
++	void addDownloadChatMedia();
+@@ -1,1 +1,17 @@
+-void PeerMenuExportTopic(
++void PeerMenuDownloadChatMedia(
++		not_null<Window::SessionController*> controller,
++		not_null<PeerData*> peer) {
++	base::call_delayed(st::defaultPopupMenu.showDuration, [=] {
++		auto &local = controller->session().local();
++		const auto saved = local.readExportSettings();
++		auto media = saved;
++		media.media.types = Export::MediaSettings::Type::AllMask;
++		media.media.sizeLimit = Export::View::SizeLimitByIndex(
++			Export::View::kSizeValueCount - 1);
++		local.writeExportSettings(media);
++		Core::App().exportManager().start(peer);
++		local.writeExportSettings(saved);
++	});
++}
++
++void PeerMenuExportTopic(
+@@ -1,1 +1,13 @@
+-void Filler::addTranslate() {
++void Filler::addDownloadChatMedia() {
++	if (!_peer->canExportChatHistory() || (_thread && _thread->asTopic())) {
++		return;
++	}
++	const auto peer = _peer;
++	const auto controller = _controller;
++	_addAction(
++		tr::lng_tpatch_download_all_media(tr::now),
++		[=] { PeerMenuDownloadChatMedia(controller, peer); },
++		&st::menuIconExport);
++}
++
++void Filler::addTranslate() {
+@@ -1,3 +1,4 @@
+-	addDirectMessages();
+-	addExportChat();
+-	addTranslate();
++	addDirectMessages();
++	addExportChat();
++	addDownloadChatMedia();
++	addTranslate();
+@@ -1,3 +1,4 @@
+-	addDirectMessages();
+-	addExportChat();
+-	addToggleNoForwards();
++	addDirectMessages();
++	addExportChat();
++	addDownloadChatMedia();
++	addToggleNoForwards();
+diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
+--- a/Telegram/Resources/langs/lang.strings
++++ b/Telegram/Resources/langs/lang.strings
+@@ -1,1 +1,2 @@
+ "lng_profile_export_chat" = "Export chat history";
++"lng_tpatch_download_all_media" = "Download all media…";

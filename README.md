@@ -1,6 +1,6 @@
 # Telegram Desktop v7.3.1 补丁版构建
 
-本分支将本仓库的十六项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
+本分支将本仓库的十七项客户端补丁适配到 Telegram Desktop 上游 **v7.3.1**，并提供 Windows x64 便携版构建工作流。它不是 Telegram 官方发行版。
 
 - 上游标签：[v7.3.1](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.3.1)
 - 固定源码 commit：[6fed91ffab9861771a75f29df65031b3c80b6941](https://github.com/telegramdesktop/tdesktop/commit/6fed91ffab9861771a75f29df65031b3c80b6941)
@@ -27,6 +27,7 @@
 | 0014 | 可通过 `TDESKTOP_HIDE_FROM_CAPTURE=1` 在 Windows 上隐藏 Telegram 顶层窗口及通知窗口的屏幕捕获内容；默认关闭。 |
 | 0015 | 在“设置 → 高级 → 数据与存储”显示当前实际采用的 API ID 及来源；点击复制 ID，不显示 API_HASH。 |
 | 0016 | 对已保存的非 Web 代理执行有并发上限和总超时的握手测速；可按延迟排序，或在二次确认后清理已确认不可达的代理。当前选中代理、Web 代理及未完成测试的代理都会保留，不自动切换线路。 |
+| 0017 | 在聊天菜单中打开“Download all media…”，沿用内置导出面板并预选所有媒体类型及最大大小；用户仍可选日期范围、保存位置并确认开始，不会直接无提示写入文件。论坛话题菜单不显示该项，避免把话题操作误导成整聊天导出。 |
 
 ### 按需检查 DC 连通性
 
@@ -106,7 +107,7 @@ set "TDESKTOP_HIDE_FROM_CAPTURE=1"
 
 补丁调用 Telegram Desktop 已有的截图保护管理器，将所有顶层窗口（包括通知窗口）从遵循 Windows 窗口捕获排除设置的录屏/共享结果中排除。删除该变量或关闭当前启动脚本后重新启动，恢复正常捕获。Windows 10 2004 以前的系统会回退为黑色窗口区域；部分捕获软件可能忽略系统请求，因此这不是绝对的隐私保证。它不会遮挡你本机屏幕上的窗口。
 
-push 在 v7.3.1、v7.3.1-ux、v7.3.1-bulk-forward、v7.3.1-search-from-sender、v7.3.1-api-credentials、v7.3.1-screen-share-privacy 与 v7.3.1-proxy-tools 分支的补丁、工具或该 workflow 文件变化时触发；也可以从 Actions 手动运行 workflow_dispatch。构建依赖 Windows、Visual Studio、Qt 和较长时间的依赖编译；artifact 保留 14 天，源码差异和补丁清单保留 30 天。
+push 在 v7.3.1、v7.3.1-ux、v7.3.1-bulk-forward、v7.3.1-search-from-sender、v7.3.1-api-credentials、v7.3.1-screen-share-privacy 与 v7.3.1-proxy-tools、v7.3.1-download-all-media 分支的补丁、工具或该 workflow 文件变化时触发；也可以从 Actions 手动运行 workflow_dispatch。构建依赖 Windows、Visual Studio、Qt 和较长时间的依赖编译；artifact 保留 14 天，源码差异和补丁清单保留 30 天。
 
 工作流将上游 x64 便携包固定为 [td-portable-win-x64-7.3.1.zip](https://github.com/telegramdesktop/tdesktop/releases/download/v7.3.1/td-portable-win-x64-7.3.1.zip)，并核对其 SHA-256：e3ec293ecadce43aab947e8ef274456529e634a6841e6b661eca6efe600ffcda。该包用于提取 D3D 编译器 DLL，不是本项目生成的补丁客户端。
 
@@ -120,4 +121,4 @@ v7.3.1 基线五项补丁已由 public 仓库的 [Release run #3](https://github
 
 每个 vX.Y.Z 分支对应一个上游版本，固定其 tag/commit、补丁目录、构建 workflow 和 README。这样可以隔离源码上下文与构建工具链变化；补丁不可只改版本号后直接复用。随着支持版本增加，可把重复的构建逻辑抽成共享脚本，但每个版本仍应保留独立的补丁集和上游 commit 锁定。
 
-仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的十六个固定补丁不同；它不能替代本分支的适配和验证。
+仓库中的 build-noads.yml 是另一条手动前移流程，来源与本分支的十七个固定补丁不同；它不能替代本分支的适配和验证。
